@@ -44,7 +44,6 @@ function displayName(c: Creator): string {
 }
 
 const CREATOR_SIZES = ["Nano-Influencer", "Micro-Influencer", "Mid-tier", "Macro-Influencer", "Mega-Influencer"];
-
 const sizeColor: Record<string, string> = {
   "Nano-Influencer": "#22c55e",
   "Micro-Influencer": "#3b82f6",
@@ -53,10 +52,176 @@ const sizeColor: Record<string, string> = {
   "Mega-Influencer": "#ef4444",
 };
 
-// ─── Toast system ────────────────────────────────────────────────────────────
-let toastCounter = 0;
+// ─── Default filters ──────────────────────────────────────────────────────────
+const DEFAULT_FILTERS = {
+  niche: "", gender: "", ageGroup: "", country: "", city: "",
+  creatorSize: "", creatorType: "", collabStatus: "",
+  followersMin: "", followersMax: "",
+  hasEmail: "", hasTiktok: "", hasYoutube: "",
+  sortBy: "followerCount", sortOrder: "desc",
+};
 
-function ToastStack({ toasts, remove }: { toasts: Toast[]; remove: (id: number) => void }) {
+// ─── NLP query parser ─────────────────────────────────────────────────────────
+// Parses natural language like:
+//   "Germany food creators 20k+ followers female age 20-30"
+// Returns { cleanQuery, extractedFilters }
+function parseNaturalQuery(raw: string): { cleanQuery: string; extractedFilters: Partial<typeof DEFAULT_FILTERS> } {
+  const extracted: Partial<typeof DEFAULT_FILTERS> = {};
+  let tokens = raw.toLowerCase().split(/\s+/);
+  const consumed = new Set<number>();
+
+  // ── Follower range patterns ──
+  // "20k+" | "20k-500k" | "20k to 500k" | "<500k" | "500k+" | "1m+"
+  const parseFollowerVal = (s: string): number | null => {
+    const m = s.match(/^([\d.]+)(k|m)?$/);
+    if (!m) return null;
+    const base = parseFloat(m[1]);
+    const mult = m[2] === "m" ? 1_000_000 : m[2] === "k" ? 1_000 : 1;
+    return Math.round(base * mult);
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+
+    // "20k+" or "500k+"
+    const plusMatch = t.match(/^([\d.]+[km]?)\+$/);
+    if (plusMatch) {
+      const val = parseFollowerVal(plusMatch[1]);
+      if (val !== null) { extracted.followersMin = String(val); consumed.add(i); continue; }
+    }
+
+    // "<500k"
+    const ltMatch = t.match(/^<([\d.]+[km]?)$/);
+    if (ltMatch) {
+      const val = parseFollowerVal(ltMatch[1]);
+      if (val !== null) { extracted.followersMax = String(val); consumed.add(i); continue; }
+    }
+
+    // "20k-500k" range
+    const rangeMatch = t.match(/^([\d.]+[km]?)-([\d.]+[km]?)$/);
+    if (rangeMatch) {
+      const lo = parseFollowerVal(rangeMatch[1]);
+      const hi = parseFollowerVal(rangeMatch[2]);
+      // Could be age range or follower range — distinguish by magnitude
+      if (lo !== null && hi !== null) {
+        if (lo >= 1000 || hi >= 1000) {
+          extracted.followersMin = String(lo);
+          extracted.followersMax = String(hi);
+          consumed.add(i); continue;
+        }
+      }
+    }
+
+    // followers keyword after number e.g. "20000 followers"
+    if ((t === "followers" || t === "follower") && i > 0 && !consumed.has(i - 1)) {
+      // already handled by plus/range; just consume the word
+      consumed.add(i);
+    }
+  }
+
+  // ── Age group ──
+  // "age 20-30" | "20-30 age" | "age: 25-34" | "18-24"
+  const ageKeywordIdx = tokens.findIndex(t => t === "age" || t === "age:");
+  if (ageKeywordIdx !== -1) {
+    consumed.add(ageKeywordIdx);
+    const next = tokens[ageKeywordIdx + 1];
+    if (next) {
+      const ageRange = next.replace(":", "").match(/^(\d+)-(\d+)$/);
+      if (ageRange) {
+        const lo = parseInt(ageRange[1]);
+        const hi = parseInt(ageRange[2]);
+        // Map to available age group options
+        if (lo <= 18 && hi <= 24) extracted.ageGroup = "18-24";
+        else if (lo >= 25 && hi <= 34) extracted.ageGroup = "25-34";
+        else if (lo >= 35 && hi <= 44) extracted.ageGroup = "35-44";
+        else if (lo >= 45) extracted.ageGroup = "45+";
+        else if (lo >= 18 && hi <= 30) extracted.ageGroup = "18-24"; // best match
+        else if (lo >= 20 && hi <= 35) extracted.ageGroup = "25-34";
+        consumed.add(ageKeywordIdx + 1);
+      }
+    }
+  }
+  // standalone age ranges like "20-30" not already consumed
+  for (let i = 0; i < tokens.length; i++) {
+    if (consumed.has(i)) continue;
+    const m = tokens[i].match(/^(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      const lo = parseInt(m[1]);
+      const hi = parseInt(m[2]);
+      if (lo >= 14 && hi <= 70) {
+        if (lo <= 24 && hi <= 27) extracted.ageGroup = "18-24";
+        else if (lo >= 25 && hi <= 36) extracted.ageGroup = "25-34";
+        else if (lo >= 35 && hi <= 46) extracted.ageGroup = "35-44";
+        else if (lo >= 45) extracted.ageGroup = "45+";
+        else if (lo >= 18 && hi <= 30) extracted.ageGroup = "18-24";
+        else if (lo >= 20 && hi <= 35) extracted.ageGroup = "25-34";
+        consumed.add(i);
+      }
+    }
+  }
+
+  // ── Gender ──
+  const genderMap: Record<string, string> = {
+    female: "female", women: "female", woman: "female", girl: "female", girls: "female",
+    male: "male", men: "male", man: "male", boy: "male", boys: "male",
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    if (consumed.has(i)) continue;
+    if (genderMap[tokens[i]]) {
+      extracted.gender = genderMap[tokens[i]];
+      consumed.add(i); break;
+    }
+  }
+
+  // ── Creator size ──
+  const sizeKeywords: Record<string, string> = {
+    nano: "Nano-Influencer", micro: "Micro-Influencer", "mid-tier": "Mid-tier",
+    mid: "Mid-tier", macro: "Macro-Influencer", mega: "Mega-Influencer",
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    if (consumed.has(i)) continue;
+    if (sizeKeywords[tokens[i]]) {
+      extracted.creatorSize = sizeKeywords[tokens[i]];
+      consumed.add(i); break;
+    }
+  }
+
+  // ── Collab status ──
+  for (let i = 0; i < tokens.length; i++) {
+    if (consumed.has(i)) continue;
+    if (tokens[i] === "open") { extracted.collabStatus = "open"; consumed.add(i); break; }
+    if (tokens[i] === "closed") { extracted.collabStatus = "closed"; consumed.add(i); break; }
+  }
+
+  // ── Social presence ──
+  const socialKeywords: Record<string, keyof typeof DEFAULT_FILTERS> = {
+    tiktok: "hasTiktok", youtube: "hasYoutube", yt: "hasYoutube", email: "hasEmail",
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    if (consumed.has(i)) continue;
+    const field = socialKeywords[tokens[i]];
+    if (field) {
+      (extracted as Record<string, string>)[field] = "true";
+      consumed.add(i);
+    }
+  }
+
+  // ── Stop words to strip ──
+  const stopWords = new Set(["creators", "creator", "influencer", "influencers",
+    "with", "and", "the", "in", "from", "a", "an", "of", "for", "between"]);
+  for (let i = 0; i < tokens.length; i++) {
+    if (stopWords.has(tokens[i])) consumed.add(i);
+  }
+
+  // ── Remaining tokens become the text search query ──
+  const cleanQuery = tokens.filter((_, i) => !consumed.has(i)).join(" ").trim();
+
+  return { cleanQuery, extractedFilters: extracted };
+}
+
+// ─── Toast system ─────────────────────────────────────────────────────────────
+let toastCounter = 0;
+function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 items-center pointer-events-none">
       {toasts.map(t => (
@@ -70,12 +235,8 @@ function ToastStack({ toasts, remove }: { toasts: Toast[]; remove: (id: number) 
             animation: "slideUp 0.2s ease",
           }}
         >
-          {t.type === "success" && (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 flex-shrink-0"><polyline points="20 6 9 17 4 12"/></svg>
-          )}
-          {t.type === "error" && (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 flex-shrink-0"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-          )}
+          {t.type === "success" && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 flex-shrink-0"><polyline points="20 6 9 17 4 12"/></svg>}
+          {t.type === "error" && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 flex-shrink-0"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>}
           {t.msg}
         </div>
       ))}
@@ -86,16 +247,8 @@ function ToastStack({ toasts, remove }: { toasts: Toast[]; remove: (id: number) 
 // ─── Confirm Dialog ───────────────────────────────────────────────────────────
 function ConfirmModal({ dialog, onClose }: { dialog: ConfirmDialog; onClose: () => void }) {
   return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.7)" }}
-      onClick={onClose}
-    >
-      <div
-        className="rounded-2xl p-6 w-[360px] shadow-2xl"
-        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-        onClick={e => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div className="rounded-2xl p-6 w-[360px] shadow-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
         <div className="flex items-start gap-3 mb-4">
           {dialog.danger && (
             <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: "rgba(239,68,68,0.15)" }}>
@@ -108,78 +261,89 @@ function ConfirmModal({ dialog, onClose }: { dialog: ConfirmDialog; onClose: () 
           </div>
         </div>
         <div className="flex gap-2 justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm font-medium"
-            style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => { dialog.onConfirm(); onClose(); }}
-            className="px-4 py-2 rounded-lg text-sm font-medium"
-            style={{ background: dialog.danger ? "#ef4444" : "var(--accent)", color: "white" }}
-          >
-            {dialog.confirmLabel ?? "Confirm"}
-          </button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Cancel</button>
+          <button onClick={() => { dialog.onConfirm(); onClose(); }} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: dialog.danger ? "#ef4444" : "var(--accent)", color: "white" }}>{dialog.confirmLabel ?? "Confirm"}</button>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Sign Out Confirm ─────────────────────────────────────────────────────────
+// ─── Sign Out Modal ───────────────────────────────────────────────────────────
 function SignOutModal({ onConfirm, onClose, userName }: { onConfirm: () => void; onClose: () => void; userName: string }) {
   return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.7)" }}
-      onClick={onClose}
-    >
-      <div
-        className="rounded-2xl p-6 w-[340px] shadow-2xl text-center"
-        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-        onClick={e => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div className="rounded-2xl p-6 w-[340px] shadow-2xl text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
         <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: "var(--surface-2)" }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-7 h-7" style={{ color: "var(--text-secondary)" }}>
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-            <polyline points="16 17 21 12 16 7"/>
-            <line x1="21" y1="12" x2="9" y2="12"/>
-          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-7 h-7" style={{ color: "var(--text-secondary)" }}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </div>
         <h3 className="font-semibold text-base mb-1" style={{ color: "var(--text-primary)" }}>Sign out?</h3>
         <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>
-          You&apos;ll be signed out of <span style={{ color: "var(--text-primary)" }}>{userName}</span>. Any unsaved changes will be lost.
+          You&apos;ll be signed out of <span style={{ color: "var(--text-primary)" }}>{userName}</span>.
         </p>
         <div className="flex gap-2">
-          <button
-            onClick={onClose}
-            className="flex-1 py-2.5 rounded-lg text-sm font-medium"
-            style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
-          >
-            Stay
-          </button>
-          <button
-            onClick={() => { onConfirm(); onClose(); }}
-            className="flex-1 py-2.5 rounded-lg text-sm font-medium"
-            style={{ background: "var(--accent)", color: "white" }}
-          >
-            Sign out
-          </button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Stay</button>
+          <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>Sign out</button>
         </div>
       </div>
     </div>
   );
 }
 
+// ─── Active filter pills ──────────────────────────────────────────────────────
+const FILTER_LABELS: Record<string, string> = {
+  niche: "Niche", gender: "Gender", ageGroup: "Age", country: "Country", city: "City",
+  creatorSize: "Size", creatorType: "Type", collabStatus: "Status",
+  followersMin: "Min Followers", followersMax: "Max Followers",
+  hasEmail: "Has Email", hasTiktok: "Has TikTok", hasYoutube: "Has YouTube",
+};
+
+function ActiveFilterPills({
+  filters,
+  onRemove,
+}: {
+  filters: typeof DEFAULT_FILTERS;
+  onRemove: (key: string) => void;
+}) {
+  const active = Object.entries(filters).filter(
+    ([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== ""
+  );
+  if (active.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 px-6 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+      {active.map(([k, v]) => (
+        <span
+          key={k}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+          style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)" }}
+        >
+          {FILTER_LABELS[k] ?? k}: {k === "followersMin" || k === "followersMax" ? fmtNum(v) : v}
+          <button
+            onClick={() => onRemove(k)}
+            className="ml-0.5 opacity-70 hover:opacity-100"
+            aria-label={`Remove ${k} filter`}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-3 h-3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [creators, setCreators] = useState<Creator[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
+
+  // Raw user input in the search box
+  const [rawQuery, setRawQuery] = useState("");
+  // The actual text query sent to the backend (after NLP extraction)
+  const [cleanQuery, setCleanQuery] = useState("");
+
   const [page, setPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
   const [showListsSidebar, setShowListsSidebar] = useState(false);
@@ -191,15 +355,10 @@ export default function DashboardPage() {
   const [showSignOut, setShowSignOut] = useState(false);
   const [nicheOptions, setNicheOptions] = useState<string[]>([]);
   const [countryOptions, setCountryOptions] = useState<string[]>([]);
+  const [cityOptions, setCityOptions] = useState<string[]>([]);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [filters, setFilters] = useState({
-    niche: "", gender: "", ageGroup: "", country: "", city: "",
-    creatorSize: "", creatorType: "", collabStatus: "",
-    followersMin: "", followersMax: "",
-    hasEmail: "", hasTiktok: "", hasYoutube: "",
-    sortBy: "followerCount", sortOrder: "desc",
-  });
+  const [filters, setFilters] = useState({ ...DEFAULT_FILTERS });
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -207,9 +366,7 @@ export default function DashboardPage() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3200);
   }
 
-  function confirm(dialog: ConfirmDialog) {
-    setConfirmDialog(dialog);
-  }
+  function confirm(dialog: ConfirmDialog) { setConfirmDialog(dialog); }
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -217,22 +374,28 @@ export default function DashboardPage() {
       .then(d => { if (d) setUser(d.user); });
 
     fetch("/api/lists")
-      .then(r => { if (!r.ok) return { lists: [] }; return r.json(); })
+      .then(r => r.ok ? r.json() : { lists: [] })
       .then(d => setSavedLists(d.lists || []));
 
-    // Load niche + country options from the data
+    // Load all dropdown options from DB
     fetch("/api/creators/meta")
-      .then(r => r.ok ? r.json() : { niches: [], countries: [] })
+      .then(r => r.ok ? r.json() : { niches: [], countries: [], cities: [] })
       .then(d => {
-        setNicheOptions(d.primaryniches || []);
-        setCountryOptions(d.countries || []);
+        setNicheOptions((d.primaryniches || d.niches || []).filter(Boolean).sort());
+        setCountryOptions((d.countries || []).filter(Boolean).sort());
+        setCityOptions((d.cities || []).filter(Boolean).sort());
       });
   }, []);
 
-  const fetchCreators = useCallback(async (q: string, p: number, f: typeof filters) => {
+  const fetchCreators = useCallback(async (q: string, p: number, f: typeof DEFAULT_FILTERS) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(p), pageSize: "50", sortBy: f.sortBy, sortOrder: f.sortOrder });
+      const params = new URLSearchParams({
+        page: String(p),
+        pageSize: "50",
+        sortBy: f.sortBy,
+        sortOrder: f.sortOrder,
+      });
       if (q) params.set("q", q);
       if (f.niche) params.set("niche", f.niche);
       if (f.gender) params.set("gender", f.gender);
@@ -247,25 +410,47 @@ export default function DashboardPage() {
       if (f.hasEmail) params.set("hasEmail", f.hasEmail);
       if (f.hasTiktok) params.set("hasTiktok", f.hasTiktok);
       if (f.hasYoutube) params.set("hasYoutube", f.hasYoutube);
+
       const res = await fetch(`/api/creators?${params}`);
       if (res.status === 401) { router.push("/login"); return; }
-      if (!res.ok) {
-        showToast("Failed to load creators", "error");
-        return;
-      }
+      if (!res.ok) { showToast("Failed to load creators", "error"); return; }
       const data = await res.json();
       setCreators(data.creators || []);
       setPagination(data.pagination || null);
     } finally { setLoading(false); }
   }, [router]);
 
+  // Parse NLP from rawQuery and merge into filters, then debounce fetch
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => { setPage(1); fetchCreators(query, 1, filters); }, 400);
+    searchTimer.current = setTimeout(() => {
+      const { cleanQuery: cq, extractedFilters } = parseNaturalQuery(rawQuery);
+      setCleanQuery(cq);
+      const mergedFilters = { ...filters, ...extractedFilters };
+      // Only update filter state if NLP extracted something new
+      if (Object.keys(extractedFilters).length > 0) {
+        setFilters(prev => ({ ...prev, ...extractedFilters }));
+      }
+      setPage(1);
+      fetchCreators(cq, 1, mergedFilters);
+    }, 400);
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
-  }, [query, filters, fetchCreators]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawQuery]);
 
-  useEffect(() => { fetchCreators(query, page, filters); }, [page]);
+  // Re-fetch when manual filters change (not driven by NLP)
+  useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      const { cleanQuery: cq } = parseNaturalQuery(rawQuery);
+      setPage(1);
+      fetchCreators(cq, 1, filters);
+    }, 200);
+    return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
+
+  useEffect(() => { fetchCreators(cleanQuery, page, filters); }, [page]); // eslint-disable-line
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -283,13 +468,8 @@ export default function DashboardPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newListName.trim() }),
     });
-    if (res.ok) {
-      setNewListName("");
-      refreshLists();
-      showToast("List created");
-    } else {
-      showToast("Failed to create list", "error");
-    }
+    if (res.ok) { setNewListName(""); refreshLists(); showToast("List created"); }
+    else showToast("Failed to create list", "error");
   }
 
   async function addToList(listId: string, creatorId: string) {
@@ -298,16 +478,9 @@ export default function DashboardPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ creatorId }),
     });
-    if (res.ok) {
-      showToast("Creator added to list");
-      setAddToListCreator(null);
-      refreshLists();
-    } else if (res.status === 409) {
-      showToast("Already in this list", "info");
-      setAddToListCreator(null);
-    } else {
-      showToast("Failed to add to list", "error");
-    }
+    if (res.ok) { showToast("Creator added to list"); setAddToListCreator(null); refreshLists(); }
+    else if (res.status === 409) { showToast("Already in this list", "info"); setAddToListCreator(null); }
+    else showToast("Failed to add to list", "error");
   }
 
   function handleDeleteList(id: string, name: string) {
@@ -318,17 +491,25 @@ export default function DashboardPage() {
       danger: true,
       onConfirm: async () => {
         const res = await fetch(`/api/lists/${id}`, { method: "DELETE" });
-        if (res.ok) {
-          refreshLists();
-          showToast("List deleted");
-        } else {
-          showToast("Failed to delete list", "error");
-        }
+        if (res.ok) { refreshLists(); showToast("List deleted"); }
+        else showToast("Failed to delete list", "error");
       },
     });
   }
 
-  const activeFiltersCount = Object.entries(filters).filter(([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== "").length;
+  function clearAllFilters() {
+    setFilters({ ...DEFAULT_FILTERS });
+    setRawQuery("");
+    setCleanQuery("");
+  }
+
+  function removeFilter(key: string) {
+    setFilters(prev => ({ ...prev, [key]: "" }));
+  }
+
+  const activeFiltersCount = Object.entries(filters).filter(
+    ([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== ""
+  ).length;
 
   const inputStyle = { background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" };
   const selectStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
@@ -341,7 +522,8 @@ export default function DashboardPage() {
       `}</style>
 
       <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
-        {/* Sidebar */}
+
+        {/* ── Sidebar ── */}
         <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
           <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
             <div className="flex items-center gap-2">
@@ -356,12 +538,14 @@ export default function DashboardPage() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
               Search
             </a>
-            <button onClick={() => setShowListsSidebar(!showListsSidebar)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}>
+            <button
+              onClick={() => setShowListsSidebar(!showListsSidebar)}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
+              style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}
+            >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
               Saved Lists
-              {savedLists.length > 0 && (
-                <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{savedLists.length}</span>
-              )}
+              {savedLists.length > 0 && <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{savedLists.length}</span>}
             </button>
             {user?.role === "ADMIN" && (
               <a href="/admin" className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ color: "var(--text-secondary)" }}>
@@ -388,7 +572,7 @@ export default function DashboardPage() {
           </div>
         </aside>
 
-        {/* Lists panel */}
+        {/* ── Lists panel ── */}
         {showListsSidebar && (
           <div className="w-72 flex-shrink-0 flex flex-col border-r overflow-y-auto" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
             <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
@@ -414,11 +598,9 @@ export default function DashboardPage() {
                   <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface)", color: "var(--text-secondary)" }}>{list._count.items}</span>
                   <button
                     onClick={e => { e.stopPropagation(); handleDeleteList(list.id, list.name); }}
-                    className="ml-4 pl-4 opacity-50 group-hover:opacity-100 px-2 py-1 rounded text-xs font-medium transition-opacity"
+                    className="ml-4 pl-4 opacity-0 group-hover:opacity-100 px-2 py-1 rounded text-xs font-medium transition-opacity"
                     style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}
-                  >
-                  Delete
-                  </button>
+                  >Delete</button>
                 </div>
               ))}
             </div>
@@ -432,35 +614,29 @@ export default function DashboardPage() {
                   className="flex-1 px-3 py-1.5 rounded-lg text-sm outline-none"
                   style={inputStyle}
                 />
-                <button
-                  onClick={createList}
-                  disabled={!newListName.trim()}
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
-                  style={{ background: "var(--accent)", color: "white" }}
-                >
-                  Create
-                </button>
+                <button onClick={createList} disabled={!newListName.trim()} className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>Create</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Main */}
+        {/* ── Main content ── */}
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
           {/* Search bar */}
           <div className="px-6 py-4 border-b" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
             <div className="flex items-center gap-3">
               <div className="flex-1 relative">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none" style={{ color: "var(--text-secondary)" }}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
                 <input
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  placeholder='Search — try "food creators Nepal" or "beauty female micro"'
-                  className="w-full pl-10 pr-4 py-2.5 rounded-lg text-sm outline-none"
+                  value={rawQuery}
+                  onChange={e => setRawQuery(e.target.value)}
+                  placeholder='Try "Germany food creators 20k+ followers female age 20-30"'
+                  className="w-full pl-10 pr-10 py-2.5 rounded-lg text-sm outline-none"
                   style={inputStyle}
                 />
-                {query && (
-                  <button onClick={() => setQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "var(--text-secondary)" }}>
+                {rawQuery && (
+                  <button onClick={clearAllFilters} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "var(--text-secondary)" }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                   </button>
                 )}
@@ -477,54 +653,40 @@ export default function DashboardPage() {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
                 Filters
                 {activeFiltersCount > 0 && (
-                  <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: "var(--accent)", color: "white" }}>
-                    {activeFiltersCount}
-                  </span>
+                  <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: "var(--accent)", color: "white" }}>{activeFiltersCount}</span>
                 )}
               </button>
             </div>
 
+            {/* Filter panel */}
             {showFilters && (
               <div className="mt-4 p-4 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
 
-                {/* Niche — dropdown from data */}
+                {/* Niche — fixed: shows label text */}
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Niche</label>
-                  <select
-                    value={filters.niche}
-                    onChange={e => setFilters(p => ({ ...p, niche: e.target.value }))}
-                    className="w-full px-3 py-1.5 rounded-lg text-sm outline-none"
-                    style={selectStyle}
-                  >
+                  <select value={filters.niche} onChange={e => setFilters(p => ({ ...p, niche: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                     <option value="">All niches</option>
-                    {nicheOptions.map(n => <option key={n} value={n}>{}</option>)}
+                    {nicheOptions.map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
 
-                {/* Country — dropdown from data */}
+                {/* Country — dropdown from DB */}
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Country</label>
-                  <select
-                    value={filters.country}
-                    onChange={e => setFilters(p => ({ ...p, country: e.target.value }))}
-                    className="w-full px-3 py-1.5 rounded-lg text-sm outline-none"
-                    style={selectStyle}
-                  >
+                  <select value={filters.country} onChange={e => setFilters(p => ({ ...p, country: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                     <option value="">All countries</option>
                     {countryOptions.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
 
-                {/* City — free text */}
+                {/* City — dropdown from DB (filtered by selected country if possible) */}
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>City</label>
-                  <input
-                    value={filters.city}
-                    onChange={e => setFilters(p => ({ ...p, city: e.target.value }))}
-                    placeholder="New York, Mumbai…"
-                    className="w-full px-3 py-1.5 rounded-lg text-sm outline-none"
-                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                  />
+                  <select value={filters.city} onChange={e => setFilters(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
+                    <option value="">All cities</option>
+                    {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
 
                 {/* Creator Type */}
@@ -570,18 +732,22 @@ export default function DashboardPage() {
 
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Min Followers</label>
-                  <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))} placeholder="10,000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
+                  <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))} placeholder="10000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
                 </div>
 
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Max Followers</label>
-                  <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))} placeholder="500,000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
+                  <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))} placeholder="500000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
                 </div>
 
-                {[{ label: "Has Email", key: "hasEmail" }, { label: "Has TikTok", key: "hasTiktok" }, { label: "Has YouTube", key: "hasYoutube" }].map(f => (
+                {[
+                  { label: "Has Email", key: "hasEmail" },
+                  { label: "Has TikTok", key: "hasTiktok" },
+                  { label: "Has YouTube", key: "hasYoutube" },
+                ].map(f => (
                   <div key={f.key}>
                     <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{f.label}</label>
-                    <select value={filters[f.key as keyof typeof filters]} onChange={e => setFilters(p => ({ ...p, [f.key]: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
+                    <select value={filters[f.key as keyof typeof DEFAULT_FILTERS]} onChange={e => setFilters(p => ({ ...p, [f.key]: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                       <option value="">Any</option><option value="true">Yes</option><option value="false">No</option>
                     </select>
                   </div>
@@ -590,7 +756,10 @@ export default function DashboardPage() {
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Sort By</label>
                   <select value={filters.sortBy} onChange={e => setFilters(p => ({ ...p, sortBy: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="followerCount">Followers</option><option value="username">Username</option><option value="lastUpdated">Last Updated</option><option value="latestPostDate">Latest Post</option>
+                    <option value="followerCount">Followers</option>
+                    <option value="username">Username</option>
+                    <option value="lastUpdated">Last Updated</option>
+                    <option value="latestPostDate">Latest Post</option>
                   </select>
                 </div>
 
@@ -602,11 +771,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="col-span-full flex justify-end">
-                  <button
-                    onClick={() => setFilters({ niche: "", gender: "", ageGroup: "", country: "", city: "", creatorSize: "", creatorType: "", collabStatus: "", followersMin: "", followersMax: "", hasEmail: "", hasTiktok: "", hasYoutube: "", sortBy: "followerCount", sortOrder: "desc" })}
-                    className="px-4 py-1.5 rounded-lg text-sm"
-                    style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
-                  >
+                  <button onClick={clearAllFilters} className="px-4 py-1.5 rounded-lg text-sm" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
                     Clear all filters
                   </button>
                 </div>
@@ -614,19 +779,29 @@ export default function DashboardPage() {
             )}
           </div>
 
+          {/* Active filter pills */}
+          <ActiveFilterPills filters={filters} onRemove={removeFilter} />
+
           {/* Results count */}
           <div className="px-6 py-2.5 flex items-center gap-3 text-sm" style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
             {pagination && (loading ? "Searching…" : `${pagination.total.toLocaleString()} creators found`)}
           </div>
 
-          {/* Cards */}
+          {/* Creator cards */}
           <div className="flex-1 overflow-y-auto p-6">
             {loading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {Array.from({ length: 12 }).map((_, i) => (
                   <div key={i} className="rounded-xl p-4 animate-pulse" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                    <div className="flex items-center gap-3 mb-3"><div className="w-10 h-10 rounded-full" style={{ background: "var(--surface-2)" }}/><div className="flex-1 space-y-1.5"><div className="h-3 rounded w-3/4" style={{ background: "var(--surface-2)" }}/><div className="h-3 rounded w-1/2" style={{ background: "var(--surface-2)" }}/></div></div>
-                    <div className="h-3 rounded w-full mb-2" style={{ background: "var(--surface-2)" }}/><div className="h-3 rounded w-2/3" style={{ background: "var(--surface-2)" }}/>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-10 h-10 rounded-full" style={{ background: "var(--surface-2)" }}/>
+                      <div className="flex-1 space-y-1.5">
+                        <div className="h-3 rounded w-3/4" style={{ background: "var(--surface-2)" }}/>
+                        <div className="h-3 rounded w-1/2" style={{ background: "var(--surface-2)" }}/>
+                      </div>
+                    </div>
+                    <div className="h-3 rounded w-full mb-2" style={{ background: "var(--surface-2)" }}/>
+                    <div className="h-3 rounded w-2/3" style={{ background: "var(--surface-2)" }}/>
                   </div>
                 ))}
               </div>
@@ -638,11 +813,7 @@ export default function DashboardPage() {
                 <h3 className="font-medium mb-1">No creators found</h3>
                 <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Try adjusting your search or filters</p>
                 {activeFiltersCount > 0 && (
-                  <button
-                    onClick={() => setFilters({ niche: "", gender: "", ageGroup: "", country: "", city: "", creatorSize: "", creatorType: "", collabStatus: "", followersMin: "", followersMax: "", hasEmail: "", hasTiktok: "", hasYoutube: "", sortBy: "followerCount", sortOrder: "desc" })}
-                    className="mt-4 px-4 py-2 rounded-lg text-sm"
-                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--accent)" }}
-                  >
+                  <button onClick={clearAllFilters} className="mt-4 px-4 py-2 rounded-lg text-sm" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--accent)" }}>
                     Clear all filters
                   </button>
                 )}
@@ -690,8 +861,8 @@ export default function DashboardPage() {
                       {c.email && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>✉</span>}
                       {c.collaborationStatus && (
                         <span className="text-xs px-1.5 py-0.5 rounded ml-auto capitalize" style={{
-                          background: ["open","active"].includes(c.collaborationStatus.toLowerCase()) ? "rgba(34,197,94,0.15)" : "var(--surface-2)",
-                          color: ["open","active"].includes(c.collaborationStatus.toLowerCase()) ? "#22c55e" : "var(--text-secondary)",
+                          background: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "rgba(34,197,94,0.15)" : "var(--surface-2)",
+                          color: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "#22c55e" : "var(--text-secondary)",
                         }}>{c.collaborationStatus}</span>
                       )}
                     </div>
@@ -754,10 +925,9 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Overlays */}
       {confirmDialog && <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />}
       {showSignOut && <SignOutModal onConfirm={logout} onClose={() => setShowSignOut(false)} userName={user?.email ?? ""} />}
-      <ToastStack toasts={toasts} remove={id => setToasts(prev => prev.filter(t => t.id !== id))} />
+      <ToastStack toasts={toasts} />
     </>
   );
 }
