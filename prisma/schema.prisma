@@ -1,0 +1,346 @@
+generator client {
+  provider        = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["bronze", "app"]
+}
+
+// ── App tables (created by Prisma migrations) ─────────────────
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  fullName     String
+  passwordHash String
+  role         Role       @default(USER)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  lastLoginAt  DateTime?
+
+  auditLogs  AuditLog[]
+  savedLists SavedList[]
+
+  @@map("users")
+  @@schema("app")
+}
+
+enum Role {
+  ADMIN
+  USER
+  @@schema("app")
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+  SUSPENDED
+  @@schema("app")
+}
+
+model SavedList {
+  id        String   @id @default(cuid())
+  name      String
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items SavedListItem[]
+
+  @@map("saved_lists")
+  @@schema("app")
+}
+
+model SavedListItem {
+  id        String   @id @default(cuid())
+  listId    String
+  creatorId String
+  addedAt   DateTime @default(now())
+
+  list    SavedList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  creator Creator @relation(fields: [creatorId], references: [pk], onDelete: Cascade)
+
+  @@unique([listId, creatorId])
+  @@map("saved_list_items")
+  @@schema("app")
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  userId    String
+  action    AuditAction
+  details   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+  @@schema("app")
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  SEARCH
+  VIEW_CREATOR
+  CREATE_LIST
+  ADD_TO_LIST
+  REMOVE_FROM_LIST
+  EXPORT
+  FAILED_LOGIN
+  @@schema("app")
+}
+
+// ── Existing table — bronze.creators (read-only, no migrations) ─
+model Creator {
+  pk                              String  @id @map("pk")
+  email                           String?  @map("email")
+  primarySocialLink               String?  @map("primary_social_link")
+  username                        String?  @map("username")
+  firstName                       String?  @map("first_name")
+  lastName                        String?  @map("last_name")
+  fullName                        String?  @map("full_name")
+  creatorType                     String?  @map("creator_type")
+  addressCity                     String?  @map("address_city")
+  addressState                    String?  @map("address_state")
+  addressCountry                  String?  @map("address_country")
+  addressZip                      String?  @map("address_zip")
+  latitude                        String?  @map("latitude")
+  longitude                       String?  @map("longitude")
+  postsWithLocation               Int?     @map("posts_with_location")
+  totalPostsScraped               Int?     @map("total_posts_scraped")
+  collaborationStatus             String?  @map("collaboration_status")
+  topCollaboration                String?  @map("top_collaboration")
+  topCollaborationBrandLogo       String?  @map("top_collaboration_brand_logo")
+  nichePrimary                    String?  @map("niche_primary")
+  nicheSecondary                  String?  @map("niche_secondary")
+  followerCount                   BigInt?  @map("follower_count")
+  creatorSize                     String?  @map("creator_size")
+  ageGroup                        String?  @map("age_group")
+  age                             Int?     @map("age")
+  gender                          String?  @map("gender")
+  phoneNumber                     String?  @map("phone_number")
+  profilePicture                  String?  @map("profile_picture")
+  tiktokLink                      String?  @map("tiktok_link")
+  youtubeLink                     String?  @map("youtube_link")
+  xLink                           String?  @map("x_link")
+  linktreeLink                    String?  @map("linktree_link")
+  otherSocialMedia                String?  @map("other_social_media")
+  businessCategory                String?  @map("business_category")
+  bioData                         String?  @map("bio_data")
+  combinedHashtags                String?  @map("combined_hashtags")
+  combinedMentions                String?  @map("combined_mentions")
+  combinedHashtagsCount           Int?     @map("combined_hashtags_count")
+  combinedMentionsCount           Int?     @map("combined_mentions_count")
+  hashtagsLast90Days              String?  @map("hashtags_last_90_days")
+  mentionsLast90Days              String?  @map("mentions_last_90_days")
+  lastUpdated                     DateTime? @map("last_updated")
+  source                          String?  @map("source")
+  totalCollaborationsInRecent25   Int?     @map("total_collaborations_in_recent_25_posts")
+  ugcExamples                     String?  @map("ugc_examples")
+  latestPostLink                  String?  @map("latest_post_link")
+  latestPostDate                  DateTime? @map("latest_post_date")
+  scrapedDate                     DateTime? @map("scraped_date")
+  analyzedDate                    DateTime? @map("analyzed_date")
+  priceUsd                        String?  @map("price_usd")
+  timeGreaterThan5Minutes         String?  @map("time_greater_than_5_minutes")
+  time1To5Minutes                 String?  @map("time_1_to_5_minutes")
+  time60Seconds                   String?  @map("time_60_seconds")
+  time30Seconds                   String?  @map("time_30_seconds")
+  time15Seconds                   String?  @map("time_15_seconds")
+
+  // Post 1–25 metrics (likes, comments, views, reposts per post)
+  post1Link          String? @map("post1_link")
+  post1LikesCount    BigInt? @map("post1_likes_count")
+  post1CommentsCount BigInt? @map("post1_comments_count")
+  post1ViewsCount    BigInt? @map("post1_views_count")
+  post1RepostsCount  BigInt? @map("post1_reposts_count")
+  post1Captions      String? @map("post1_captions")
+  post1Hashtags      String? @map("post1_hashtags")
+  post2Link          String? @map("post2_link")
+  post2LikesCount    BigInt? @map("post2_likes_count")
+  post2CommentsCount BigInt? @map("post2_comments_count")
+  post2ViewsCount    BigInt? @map("post2_views_count")
+  post2RepostsCount  BigInt? @map("post2_reposts_count")
+  post2Captions      String? @map("post2_captions")
+  post2Hashtags      String? @map("post2_hashtags")
+  post3Link          String? @map("post3_link")
+  post3LikesCount    BigInt? @map("post3_likes_count")
+  post3CommentsCount BigInt? @map("post3_comments_count")
+  post3ViewsCount    BigInt? @map("post3_views_count")
+  post3RepostsCount  BigInt? @map("post3_reposts_count")
+  post3Captions      String? @map("post3_captions")
+  post3Hashtags      String? @map("post3_hashtags")
+  post4Link          String? @map("post4_link")
+  post4LikesCount    BigInt? @map("post4_likes_count")
+  post4CommentsCount BigInt? @map("post4_comments_count")
+  post4ViewsCount    BigInt? @map("post4_views_count")
+  post4RepostsCount  BigInt? @map("post4_reposts_count")
+  post4Captions      String? @map("post4_captions")
+  post4Hashtags      String? @map("post4_hashtags")
+  post5Link          String? @map("post5_link")
+  post5LikesCount    BigInt? @map("post5_likes_count")
+  post5CommentsCount BigInt? @map("post5_comments_count")
+  post5ViewsCount    BigInt? @map("post5_views_count")
+  post5RepostsCount  BigInt? @map("post5_reposts_count")
+  post5Captions      String? @map("post5_captions")
+  post5Hashtags      String? @map("post5_hashtags")
+  post6Link          String? @map("post6_link")
+  post6LikesCount    BigInt? @map("post6_likes_count")
+  post6CommentsCount BigInt? @map("post6_comments_count")
+  post6ViewsCount    BigInt? @map("post6_views_count")
+  post6RepostsCount  BigInt? @map("post6_reposts_count")
+  post6Captions      String? @map("post6_captions")
+  post6Hashtags      String? @map("post6_hashtags")
+  post7Link          String? @map("post7_link")
+  post7LikesCount    BigInt? @map("post7_likes_count")
+  post7CommentsCount BigInt? @map("post7_comments_count")
+  post7ViewsCount    BigInt? @map("post7_views_count")
+  post7RepostsCount  BigInt? @map("post7_reposts_count")
+  post7Captions      String? @map("post7_captions")
+  post7Hashtags      String? @map("post7_hashtags")
+  post8Link          String? @map("post8_link")
+  post8LikesCount    BigInt? @map("post8_likes_count")
+  post8CommentsCount BigInt? @map("post8_comments_count")
+  post8ViewsCount    BigInt? @map("post8_views_count")
+  post8RepostsCount  BigInt? @map("post8_reposts_count")
+  post8Captions      String? @map("post8_captions")
+  post8Hashtags      String? @map("post8_hashtags")
+  post9Link          String? @map("post9_link")
+  post9LikesCount    BigInt? @map("post9_likes_count")
+  post9CommentsCount BigInt? @map("post9_comments_count")
+  post9ViewsCount    BigInt? @map("post9_views_count")
+  post9RepostsCount  BigInt? @map("post9_reposts_count")
+  post9Captions      String? @map("post9_captions")
+  post9Hashtags      String? @map("post9_hashtags")
+  post10Link          String? @map("post10_link")
+  post10LikesCount    BigInt? @map("post10_likes_count")
+  post10CommentsCount BigInt? @map("post10_comments_count")
+  post10ViewsCount    BigInt? @map("post10_views_count")
+  post10RepostsCount  BigInt? @map("post10_reposts_count")
+  post10Captions      String? @map("post10_captions")
+  post10Hashtags      String? @map("post10_hashtags")
+  post11Link          String? @map("post11_link")
+  post11LikesCount    BigInt? @map("post11_likes_count")
+  post11CommentsCount BigInt? @map("post11_comments_count")
+  post11ViewsCount    BigInt? @map("post11_views_count")
+  post11RepostsCount  BigInt? @map("post11_reposts_count")
+  post11Captions      String? @map("post11_captions")
+  post11Hashtags      String? @map("post11_hashtags")
+  post12Link          String? @map("post12_link")
+  post12LikesCount    BigInt? @map("post12_likes_count")
+  post12CommentsCount BigInt? @map("post12_comments_count")
+  post12ViewsCount    BigInt? @map("post12_views_count")
+  post12RepostsCount  BigInt? @map("post12_reposts_count")
+  post12Captions      String? @map("post12_captions")
+  post12Hashtags      String? @map("post12_hashtags")
+  post13Link          String? @map("post13_link")
+  post13LikesCount    BigInt? @map("post13_likes_count")
+  post13CommentsCount BigInt? @map("post13_comments_count")
+  post13ViewsCount    BigInt? @map("post13_views_count")
+  post13RepostsCount  BigInt? @map("post13_reposts_count")
+  post13Captions      String? @map("post13_captions")
+  post13Hashtags      String? @map("post13_hashtags")
+  post14Link          String? @map("post14_link")
+  post14LikesCount    BigInt? @map("post14_likes_count")
+  post14CommentsCount BigInt? @map("post14_comments_count")
+  post14ViewsCount    BigInt? @map("post14_views_count")
+  post14RepostsCount  BigInt? @map("post14_reposts_count")
+  post14Captions      String? @map("post14_captions")
+  post14Hashtags      String? @map("post14_hashtags")
+  post15Link          String? @map("post15_link")
+  post15LikesCount    BigInt? @map("post15_likes_count")
+  post15CommentsCount BigInt? @map("post15_comments_count")
+  post15ViewsCount    BigInt? @map("post15_views_count")
+  post15RepostsCount  BigInt? @map("post15_reposts_count")
+  post15Captions      String? @map("post15_captions")
+  post15Hashtags      String? @map("post15_hashtags")
+  post16Link          String? @map("post16_link")
+  post16LikesCount    BigInt? @map("post16_likes_count")
+  post16CommentsCount BigInt? @map("post16_comments_count")
+  post16ViewsCount    BigInt? @map("post16_views_count")
+  post16RepostsCount  BigInt? @map("post16_reposts_count")
+  post16Captions      String? @map("post16_captions")
+  post16Hashtags      String? @map("post16_hashtags")
+  post17Link          String? @map("post17_link")
+  post17LikesCount    BigInt? @map("post17_likes_count")
+  post17CommentsCount BigInt? @map("post17_comments_count")
+  post17ViewsCount    BigInt? @map("post17_views_count")
+  post17RepostsCount  BigInt? @map("post17_reposts_count")
+  post17Captions      String? @map("post17_captions")
+  post17Hashtags      String? @map("post17_hashtags")
+  post18Link          String? @map("post18_link")
+  post18LikesCount    BigInt? @map("post18_likes_count")
+  post18CommentsCount BigInt? @map("post18_comments_count")
+  post18ViewsCount    BigInt? @map("post18_views_count")
+  post18RepostsCount  BigInt? @map("post18_reposts_count")
+  post18Captions      String? @map("post18_captions")
+  post18Hashtags      String? @map("post18_hashtags")
+  post19Link          String? @map("post19_link")
+  post19LikesCount    BigInt? @map("post19_likes_count")
+  post19CommentsCount BigInt? @map("post19_comments_count")
+  post19ViewsCount    BigInt? @map("post19_views_count")
+  post19RepostsCount  BigInt? @map("post19_reposts_count")
+  post19Captions      String? @map("post19_captions")
+  post19Hashtags      String? @map("post19_hashtags")
+  post20Link          String? @map("post20_link")
+  post20LikesCount    BigInt? @map("post20_likes_count")
+  post20CommentsCount BigInt? @map("post20_comments_count")
+  post20ViewsCount    BigInt? @map("post20_views_count")
+  post20RepostsCount  BigInt? @map("post20_reposts_count")
+  post20Captions      String? @map("post20_captions")
+  post20Hashtags      String? @map("post20_hashtags")
+  post21Link          String? @map("post21_link")
+  post21LikesCount    BigInt? @map("post21_likes_count")
+  post21CommentsCount BigInt? @map("post21_comments_count")
+  post21ViewsCount    BigInt? @map("post21_views_count")
+  post21RepostsCount  BigInt? @map("post21_reposts_count")
+  post21Captions      String? @map("post21_captions")
+  post21Hashtags      String? @map("post21_hashtags")
+  post22Link          String? @map("post22_link")
+  post22LikesCount    BigInt? @map("post22_likes_count")
+  post22CommentsCount BigInt? @map("post22_comments_count")
+  post22ViewsCount    BigInt? @map("post22_views_count")
+  post22RepostsCount  BigInt? @map("post22_reposts_count")
+  post22Captions      String? @map("post22_captions")
+  post22Hashtags      String? @map("post22_hashtags")
+  post23Link          String? @map("post23_link")
+  post23LikesCount    BigInt? @map("post23_likes_count")
+  post23CommentsCount BigInt? @map("post23_comments_count")
+  post23ViewsCount    BigInt? @map("post23_views_count")
+  post23RepostsCount  BigInt? @map("post23_reposts_count")
+  post23Captions      String? @map("post23_captions")
+  post23Hashtags      String? @map("post23_hashtags")
+  post24Link          String? @map("post24_link")
+  post24LikesCount    BigInt? @map("post24_likes_count")
+  post24CommentsCount BigInt? @map("post24_comments_count")
+  post24ViewsCount    BigInt? @map("post24_views_count")
+  post24RepostsCount  BigInt? @map("post24_reposts_count")
+  post24Captions      String? @map("post24_captions")
+  post24Hashtags      String? @map("post24_hashtags")
+  post25Link          String? @map("post25_link")
+  post25LikesCount    BigInt? @map("post25_likes_count")
+  post25CommentsCount BigInt? @map("post25_comments_count")
+  post25ViewsCount    BigInt? @map("post25_views_count")
+  post25RepostsCount  BigInt? @map("post25_reposts_count")
+  post25Captions      String? @map("post25_captions")
+  post25Hashtags      String? @map("post25_hashtags")
+
+  savedListItems SavedListItem[]
+
+  @@map("creators")
+  @@schema("bronze")
+  @@index([username])
+  @@index([nichePrimary])
+  @@index([followerCount])
+  @@index([gender])
+  @@index([ageGroup])
+  @@index([addressCountry])
+  @@index([email])
+}
