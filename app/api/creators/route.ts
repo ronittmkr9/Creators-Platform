@@ -24,7 +24,7 @@ const searchSchema = z.object({
   hasYoutube:   z.enum(["true", "false"]).optional(),
   page:         z.coerce.number().min(1).default(1),
   pageSize:     z.coerce.number().min(1).max(100).default(50),
-  sortBy:       z.enum(["followerCount", "username", "lastUpdated", "latestPostDate"]).default("latestPostDate"),
+  sortBy:       z.enum(["followerCount", "lastUpdated"]).default("followerCount"),
   sortOrder:    z.enum(["asc", "desc"]).default("desc"),
 });
 
@@ -80,11 +80,9 @@ export async function GET(req: NextRequest) {
   // Map sortBy camelCase to actual DB column names
   const sortColMap: Record<string, string> = {
     followerCount: "follower_count",
-    username:      "username",
     lastUpdated:   "last_updated",
-    latestPostDate: "latest_post_date",
   };
-  const orderCol = sortColMap[sortBy] ?? "latest_post_date";
+  const orderCol = sortColMap[sortBy] ?? "follower_count";
   const orderDir = sortOrder.toUpperCase() === "ASC" ? "ASC" : "DESC";
 
   const skip = (page - 1) * pageSize;
@@ -96,10 +94,10 @@ export async function GET(req: NextRequest) {
       SELECT DISTINCT ON (LOWER(username))
         pk, username, full_name, first_name, last_name,
         niche_primary, niche_secondary, follower_count,
-        address_country, address_city, gender, age_group,
+        address_country, address_state, address_city, gender, age_group,
         creator_size, profile_picture, primary_social_link,
         tiktok_link, youtube_link, email, collaboration_status,
-        latest_post_date, total_collaborations_in_recent_25_posts
+        latest_post_date, last_updated, total_collaborations_in_recent_25_posts
       FROM bronze.creators
       ${whereClause}
       ORDER BY
@@ -142,6 +140,7 @@ export async function GET(req: NextRequest) {
     nicheSecondary:               c.niche_secondary,
     followerCount:                c.follower_count?.toString() ?? null,
     addressCountry:               c.address_country,
+    addressState:                 c.address_state,
     addressCity:                  c.address_city,
     gender:                       c.gender,
     ageGroup:                     c.age_group,
@@ -153,6 +152,7 @@ export async function GET(req: NextRequest) {
     email:                        c.email,
     collaborationStatus:          c.collaboration_status,
     latestPostDate:               c.latest_post_date,
+    lastUpdated:                  c.last_updated ? new Date(c.last_updated).toISOString() : null,
     totalCollaborationsInRecent25: c.total_collaborations_in_recent_25_posts,
   }));
 

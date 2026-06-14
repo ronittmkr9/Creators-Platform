@@ -13,15 +13,18 @@ interface Creator {
   followerCount: string | null;
   addressCountry: string | null;
   addressCity: string | null;
+  addressState: string | null;
   gender: string | null;
   ageGroup: string | null;
   creatorSize: string | null;
+  creatorType: string | null;
   profilePicture: string | null;
   primarySocialLink: string | null;
   tiktokLink: string | null;
   youtubeLink: string | null;
   email: string | null;
   collaborationStatus: string | null;
+  lastUpdated: string | null;
   totalCollaborationsInRecent25: number | null;
 }
 interface Pagination { total: number; page: number; pageSize: number; totalPages: number; }
@@ -54,7 +57,7 @@ const sizeColor: Record<string, string> = {
 
 // ─── Default filters ──────────────────────────────────────────────────────────
 const DEFAULT_FILTERS = {
-  niche: "", gender: "", ageGroup: "", country: "", city: "",
+  niche: "", gender: "", ageGroup: "", country: "", state: "", city: "",
   creatorSize: "", creatorType: "", collabStatus: "",
   followersMin: "", followersMax: "",
   hasEmail: "", hasTiktok: "", hasYoutube: "",
@@ -62,16 +65,44 @@ const DEFAULT_FILTERS = {
 };
 
 // ─── NLP query parser ─────────────────────────────────────────────────────────
-// Parses natural language like:
-//   "Germany food creators 20k+ followers female age 20-30"
-// Returns { cleanQuery, extractedFilters }
-function parseNaturalQuery(raw: string): { cleanQuery: string; extractedFilters: Partial<typeof DEFAULT_FILTERS> } {
+interface Lexicons {
+  niches: string[];
+  countries: string[];
+  cities: string[];
+  states: string[];
+  creatorTypes: string[];
+}
+const EMPTY_LEXICONS: Lexicons = { niches: [], countries: [], cities: [], states: [], creatorTypes: [] };
+
+function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { cleanQuery: string; extractedFilters: Partial<typeof DEFAULT_FILTERS> } {
   const extracted: Partial<typeof DEFAULT_FILTERS> = {};
-  let tokens = raw.toLowerCase().split(/\s+/);
+  const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
   const consumed = new Set<number>();
 
-  // ── Follower range patterns ──
-  // "20k+" | "20k-500k" | "20k to 500k" | "<500k" | "500k+" | "1m+"
+  function matchPhraseAt(start: number, candidates: string[]): { value: string; len: number } | null {
+    for (let len = Math.min(4, tokens.length - start); len >= 1; len--) {
+      for (let j = 0; j < len; j++) if (consumed.has(start + j)) return null;
+      const phrase = tokens.slice(start, start + len).join(" ");
+      const match = candidates.find(c => c.toLowerCase() === phrase);
+      if (match) return { value: match, len };
+    }
+    return null;
+  }
+
+  function findAndConsumeLexiconMatch(candidates: string[]): string | null {
+    if (candidates.length === 0) return null;
+    for (let i = 0; i < tokens.length; i++) {
+      if (consumed.has(i)) continue;
+      const m = matchPhraseAt(i, candidates);
+      if (m) {
+        for (let j = 0; j < m.len; j++) consumed.add(i + j);
+        return m.value;
+      }
+    }
+    return null;
+  }
+
+  // ── Follower range ──
   const parseFollowerVal = (s: string): number | null => {
     const m = s.match(/^([\d.]+)(k|m)?$/);
     if (!m) return null;
@@ -82,109 +113,67 @@ function parseNaturalQuery(raw: string): { cleanQuery: string; extractedFilters:
 
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-
-    // "20k+" or "500k+"
     const plusMatch = t.match(/^([\d.]+[km]?)\+$/);
-    if (plusMatch) {
-      const val = parseFollowerVal(plusMatch[1]);
-      if (val !== null) { extracted.followersMin = String(val); consumed.add(i); continue; }
-    }
-
-    // "<500k"
+    if (plusMatch) { const v = parseFollowerVal(plusMatch[1]); if (v !== null) { extracted.followersMin = String(v); consumed.add(i); continue; } }
     const ltMatch = t.match(/^<([\d.]+[km]?)$/);
-    if (ltMatch) {
-      const val = parseFollowerVal(ltMatch[1]);
-      if (val !== null) { extracted.followersMax = String(val); consumed.add(i); continue; }
-    }
-
-    // "20k-500k" range
+    if (ltMatch) { const v = parseFollowerVal(ltMatch[1]); if (v !== null) { extracted.followersMax = String(v); consumed.add(i); continue; } }
     const rangeMatch = t.match(/^([\d.]+[km]?)-([\d.]+[km]?)$/);
     if (rangeMatch) {
-      const lo = parseFollowerVal(rangeMatch[1]);
-      const hi = parseFollowerVal(rangeMatch[2]);
-      // Could be age range or follower range — distinguish by magnitude
-      if (lo !== null && hi !== null) {
-        if (lo >= 1000 || hi >= 1000) {
-          extracted.followersMin = String(lo);
-          extracted.followersMax = String(hi);
-          consumed.add(i); continue;
-        }
-      }
+      const lo = parseFollowerVal(rangeMatch[1]); const hi = parseFollowerVal(rangeMatch[2]);
+      if (lo !== null && hi !== null && (lo >= 1000 || hi >= 1000)) { extracted.followersMin = String(lo); extracted.followersMax = String(hi); consumed.add(i); continue; }
     }
-
-    // followers keyword after number e.g. "20000 followers"
-    if ((t === "followers" || t === "follower") && i > 0 && !consumed.has(i - 1)) {
-      // already handled by plus/range; just consume the word
-      consumed.add(i);
-    }
+    if ((t === "followers" || t === "follower") && i > 0 && !consumed.has(i - 1)) consumed.add(i);
   }
 
   // ── Age group ──
-  // "age 20-30" | "20-30 age" | "age: 25-34" | "18-24"
-  const ageKeywordIdx = tokens.findIndex(t => t === "age" || t === "age:");
-  if (ageKeywordIdx !== -1) {
-    consumed.add(ageKeywordIdx);
-    const next = tokens[ageKeywordIdx + 1];
-    if (next) {
-      const ageRange = next.replace(":", "").match(/^(\d+)-(\d+)$/);
-      if (ageRange) {
-        const lo = parseInt(ageRange[1]);
-        const hi = parseInt(ageRange[2]);
-        // Map to available age group options
-        if (lo <= 18 && hi <= 24) extracted.ageGroup = "18-24";
-        else if (lo >= 25 && hi <= 34) extracted.ageGroup = "25-34";
-        else if (lo >= 35 && hi <= 44) extracted.ageGroup = "35-44";
-        else if (lo >= 45) extracted.ageGroup = "45+";
-        else if (lo >= 18 && hi <= 30) extracted.ageGroup = "18-24"; // best match
-        else if (lo >= 20 && hi <= 35) extracted.ageGroup = "25-34";
-        consumed.add(ageKeywordIdx + 1);
-      }
+  function ageRangeToGroup(lo: number, hi: number): string | null {
+    if (lo <= 18 && hi <= 24) return "18-24";
+    if (lo >= 25 && hi <= 34) return "25-34";
+    if (lo >= 35 && hi <= 44) return "35-44";
+    if (lo >= 45) return "45+";
+    if (lo >= 18 && hi <= 30) return "18-24";
+    if (lo >= 20 && hi <= 35) return "25-34";
+    if (lo >= 14 && hi <= 70) {
+      if (lo <= 24 && hi <= 27) return "18-24";
+      if (lo >= 25 && hi <= 36) return "25-34";
+      if (lo >= 35 && hi <= 46) return "35-44";
     }
+    return null;
   }
-  // standalone age ranges like "20-30" not already consumed
+
   for (let i = 0; i < tokens.length; i++) {
     if (consumed.has(i)) continue;
-    const m = tokens[i].match(/^(\d{1,2})-(\d{1,2})$/);
-    if (m) {
-      const lo = parseInt(m[1]);
-      const hi = parseInt(m[2]);
-      if (lo >= 14 && hi <= 70) {
-        if (lo <= 24 && hi <= 27) extracted.ageGroup = "18-24";
-        else if (lo >= 25 && hi <= 36) extracted.ageGroup = "25-34";
-        else if (lo >= 35 && hi <= 46) extracted.ageGroup = "35-44";
-        else if (lo >= 45) extracted.ageGroup = "45+";
-        else if (lo >= 18 && hi <= 30) extracted.ageGroup = "18-24";
-        else if (lo >= 20 && hi <= 35) extracted.ageGroup = "25-34";
-        consumed.add(i);
+    if (tokens[i] === "age" || tokens[i] === "ages") {
+      consumed.add(i);
+      let j = i + 1;
+      if (tokens[j] === "group") { consumed.add(j); j++; }
+      if (tokens[j] === "of") { consumed.add(j); j++; }
+      const nums: number[] = []; const consumedHere: number[] = [];
+      while (j < tokens.length && j < i + 6 && nums.length < 2) {
+        const tok = tokens[j].replace(":", "");
+        if (/^\d{1,2}-\d{1,2}$/.test(tok)) { const [lo, hi] = tok.split("-").map(Number); nums.push(lo, hi); consumedHere.push(j); break; }
+        if (/^\d{1,2}$/.test(tok)) { nums.push(Number(tok)); consumedHere.push(j); j++; continue; }
+        if (["between", "to", "and", "-", "through", "till", "until"].includes(tok)) { consumedHere.push(j); j++; continue; }
+        if (tok.endsWith("+")) { const n = parseInt(tok); if (!isNaN(n)) { nums.push(n, 70); consumedHere.push(j); } break; }
+        break;
       }
+      if (nums.length >= 2) { const g = ageRangeToGroup(Math.min(nums[0], nums[1]), Math.max(nums[0], nums[1])); if (g) extracted.ageGroup = g; consumedHere.forEach(idx => consumed.add(idx)); }
+      else if (nums.length === 1) { const g = ageRangeToGroup(nums[0], nums[0]); if (g) extracted.ageGroup = g; consumedHere.forEach(idx => consumed.add(idx)); }
     }
+  }
+  for (let i = 0; i < tokens.length; i++) {
+    if (consumed.has(i) || extracted.ageGroup) continue;
+    const m = tokens[i].match(/^(\d{1,2})-(\d{1,2})$/);
+    if (m) { const lo = parseInt(m[1]); const hi = parseInt(m[2]); const g = ageRangeToGroup(Math.min(lo, hi), Math.max(lo, hi)); if (g) { extracted.ageGroup = g; consumed.add(i); } }
   }
 
   // ── Gender ──
-  const genderMap: Record<string, string> = {
-    female: "female", women: "female", woman: "female", girl: "female", girls: "female",
-    male: "male", men: "male", man: "male", boy: "male", boys: "male",
-  };
-  for (let i = 0; i < tokens.length; i++) {
-    if (consumed.has(i)) continue;
-    if (genderMap[tokens[i]]) {
-      extracted.gender = genderMap[tokens[i]];
-      consumed.add(i); break;
-    }
-  }
+  const genderMap: Record<string, string> = { female: "female", women: "female", woman: "female", girl: "female", girls: "female", male: "male", men: "male", man: "male", boy: "male", boys: "male" };
+  for (let i = 0; i < tokens.length; i++) { if (consumed.has(i)) continue; if (genderMap[tokens[i]]) { extracted.gender = genderMap[tokens[i]]; consumed.add(i); break; } }
 
   // ── Creator size ──
-  const sizeKeywords: Record<string, string> = {
-    nano: "Nano-Influencer", micro: "Micro-Influencer", "mid-tier": "Mid-tier",
-    mid: "Mid-tier", macro: "Macro-Influencer", mega: "Mega-Influencer",
-  };
-  for (let i = 0; i < tokens.length; i++) {
-    if (consumed.has(i)) continue;
-    if (sizeKeywords[tokens[i]]) {
-      extracted.creatorSize = sizeKeywords[tokens[i]];
-      consumed.add(i); break;
-    }
-  }
+  const sizeKeywords: Record<string, string> = { nano: "Nano-Influencer", micro: "Micro-Influencer", "mid-tier": "Mid-tier", mid: "Mid-tier", macro: "Macro-Influencer", mega: "Mega-Influencer" };
+  for (let i = 0; i < tokens.length; i++) { if (consumed.has(i)) continue; if (sizeKeywords[tokens[i]]) { extracted.creatorSize = sizeKeywords[tokens[i]]; consumed.add(i); break; } }
 
   // ── Collab status ──
   for (let i = 0; i < tokens.length; i++) {
@@ -193,29 +182,64 @@ function parseNaturalQuery(raw: string): { cleanQuery: string; extractedFilters:
     if (tokens[i] === "closed") { extracted.collabStatus = "closed"; consumed.add(i); break; }
   }
 
-  // ── Social presence ──
-  const socialKeywords: Record<string, keyof typeof DEFAULT_FILTERS> = {
-    tiktok: "hasTiktok", youtube: "hasYoutube", yt: "hasYoutube", email: "hasEmail",
-  };
+  // ── Location prefix words ──
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (consumed.has(i)) continue;
+    if ((tokens[i] === "located" || tokens[i] === "based") && tokens[i + 1] === "in") { consumed.add(i); consumed.add(i + 1); }
+  }
+
+  // ── Explicit field: value pairs ──
+  const fieldPrefixes: Record<string, keyof typeof extracted> = { country: "country", state: "state", city: "city", niche: "niche", type: "creatorType" };
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (consumed.has(i)) continue;
+    const key = tokens[i].replace(":", "");
+    if (fieldPrefixes[key] && tokens[i + 1]) {
+      consumed.add(i);
+      const valTokens: string[] = []; let j = i + 1;
+      while (j < tokens.length && !consumed.has(j) && valTokens.length < 3) {
+        valTokens.push(tokens[j].replace(":", "")); consumed.add(j); j++;
+        if (fieldPrefixes[tokens[j]]) break;
+      }
+      const val = valTokens.join(" "); if (val) (extracted as Record<string, string>)[fieldPrefixes[key]] = val;
+    }
+  }
+
+  // ── Lexicon phrase matching ──
+  if (!extracted.country) { const m = findAndConsumeLexiconMatch(lexicons.countries); if (m) extracted.country = m; }
+  if (!extracted.state)   { const m = findAndConsumeLexiconMatch(lexicons.states);    if (m) extracted.state = m; }
+  if (!extracted.city)    { const m = findAndConsumeLexiconMatch(lexicons.cities);    if (m) extracted.city = m; }
+  if (!extracted.creatorType) { const m = findAndConsumeLexiconMatch(lexicons.creatorTypes); if (m) extracted.creatorType = m; }
+  if (!extracted.niche) {
+    for (let i = 0; i < tokens.length - 1; i++) {
+      if (consumed.has(i)) continue;
+      if ((tokens[i] === "primary" || tokens[i] === "secondary") && tokens[i + 1] === "niche") {
+        consumed.add(i); consumed.add(i + 1);
+        const m = findAndConsumeLexiconMatch(lexicons.niches); if (m) extracted.niche = m; break;
+      }
+    }
+    if (!extracted.niche) { const m = findAndConsumeLexiconMatch(lexicons.niches); if (m) extracted.niche = m; }
+  }
+
+  // ── Social presence: "has email", "with tiktok", "no youtube" ──
+  const socialKeywords: Record<string, keyof typeof DEFAULT_FILTERS> = { tiktok: "hasTiktok", youtube: "hasYoutube", yt: "hasYoutube", email: "hasEmail" };
   for (let i = 0; i < tokens.length; i++) {
     if (consumed.has(i)) continue;
     const field = socialKeywords[tokens[i]];
     if (field) {
-      (extracted as Record<string, string>)[field] = "true";
+      const prev = i > 0 ? tokens[i - 1] : "";
+      const negated = prev === "no" || prev === "without" || prev === "not";
+      (extracted as Record<string, string>)[field] = negated ? "false" : "true";
       consumed.add(i);
+      if (negated && !consumed.has(i - 1)) consumed.add(i - 1);
+      else if (["has", "have", "with"].includes(prev) && !consumed.has(i - 1)) consumed.add(i - 1);
     }
   }
 
-  // ── Stop words to strip ──
-  const stopWords = new Set(["creators", "creator", "influencer", "influencers",
-    "with", "and", "the", "in", "from", "a", "an", "of", "for", "between"]);
-  for (let i = 0; i < tokens.length; i++) {
-    if (stopWords.has(tokens[i])) consumed.add(i);
-  }
+  // ── Stop words ──
+  const stopWords = new Set(["creators", "creator", "influencer", "influencers", "with", "and", "the", "in", "from", "a", "an", "of", "for", "between", "has", "have", "is", "are", "who", "located", "based", "to"]);
+  for (let i = 0; i < tokens.length; i++) { if (stopWords.has(tokens[i])) consumed.add(i); }
 
-  // ── Remaining tokens become the text search query ──
   const cleanQuery = tokens.filter((_, i) => !consumed.has(i)).join(" ").trim();
-
   return { cleanQuery, extractedFilters: extracted };
 }
 
@@ -225,16 +249,8 @@ function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 items-center pointer-events-none">
       {toasts.map(t => (
-        <div
-          key={t.id}
-          className="flex items-center gap-3 px-5 py-3 rounded-full text-sm font-medium shadow-2xl pointer-events-auto"
-          style={{
-            background: t.type === "error" ? "#ef4444" : t.type === "info" ? "var(--surface-2)" : "var(--accent)",
-            color: "white",
-            border: t.type === "info" ? "1px solid var(--border)" : "none",
-            animation: "slideUp 0.2s ease",
-          }}
-        >
+        <div key={t.id} className="flex items-center gap-3 px-5 py-3 rounded-full text-sm font-medium shadow-2xl pointer-events-auto"
+          style={{ background: t.type === "error" ? "#ef4444" : t.type === "info" ? "var(--surface-2)" : "var(--accent)", color: "white", border: t.type === "info" ? "1px solid var(--border)" : "none", animation: "slideUp 0.2s ease" }}>
           {t.type === "success" && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 flex-shrink-0"><polyline points="20 6 9 17 4 12"/></svg>}
           {t.type === "error" && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 flex-shrink-0"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>}
           {t.msg}
@@ -278,9 +294,7 @@ function SignOutModal({ onConfirm, onClose, userName }: { onConfirm: () => void;
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-7 h-7" style={{ color: "var(--text-secondary)" }}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </div>
         <h3 className="font-semibold text-base mb-1" style={{ color: "var(--text-primary)" }}>Sign out?</h3>
-        <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>
-          You&apos;ll be signed out of <span style={{ color: "var(--text-primary)" }}>{userName}</span>.
-        </p>
+        <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>You&apos;ll be signed out of <span style={{ color: "var(--text-primary)" }}>{userName}</span>.</p>
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Stay</button>
           <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>Sign out</button>
@@ -292,37 +306,22 @@ function SignOutModal({ onConfirm, onClose, userName }: { onConfirm: () => void;
 
 // ─── Active filter pills ──────────────────────────────────────────────────────
 const FILTER_LABELS: Record<string, string> = {
-  niche: "Niche", gender: "Gender", ageGroup: "Age", country: "Country", city: "City",
+  niche: "Niche", gender: "Gender", ageGroup: "Age", country: "Country", state: "State", city: "City",
   creatorSize: "Size", creatorType: "Type", collabStatus: "Status",
   followersMin: "Min Followers", followersMax: "Max Followers",
   hasEmail: "Has Email", hasTiktok: "Has TikTok", hasYoutube: "Has YouTube",
 };
 
-function ActiveFilterPills({
-  filters,
-  onRemove,
-}: {
-  filters: typeof DEFAULT_FILTERS;
-  onRemove: (key: string) => void;
-}) {
-  const active = Object.entries(filters).filter(
-    ([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== ""
-  );
+function ActiveFilterPills({ filters, onRemove }: { filters: typeof DEFAULT_FILTERS; onRemove: (key: string) => void }) {
+  const active = Object.entries(filters).filter(([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== "");
   if (active.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5 px-6 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
       {active.map(([k, v]) => (
-        <span
-          key={k}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
-          style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)" }}
-        >
+        <span key={k} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+          style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)" }}>
           {FILTER_LABELS[k] ?? k}: {k === "followersMin" || k === "followersMax" ? fmtNum(v) : v}
-          <button
-            onClick={() => onRemove(k)}
-            className="ml-0.5 opacity-70 hover:opacity-100"
-            aria-label={`Remove ${k} filter`}
-          >
+          <button onClick={() => onRemove(k)} className="ml-0.5 opacity-70 hover:opacity-100" aria-label={`Remove ${k} filter`}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-3 h-3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </span>
@@ -339,10 +338,10 @@ export default function DashboardPage() {
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Raw user input in the search box
   const [rawQuery, setRawQuery] = useState("");
-  // The actual text query sent to the backend (after NLP extraction)
-  const [cleanQuery, setCleanQuery] = useState("");
+  // cleanQuery is derived from rawQuery after NLP; kept in ref so page-change
+  // effect can read it without being a dependency that re-fires the search effect
+  const cleanQueryRef = useRef("");
 
   const [page, setPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
@@ -353,12 +352,29 @@ export default function DashboardPage() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [showSignOut, setShowSignOut] = useState(false);
+
   const [nicheOptions, setNicheOptions] = useState<string[]>([]);
   const [countryOptions, setCountryOptions] = useState<string[]>([]);
   const [cityOptions, setCityOptions] = useState<string[]>([]);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [stateOptions, setStateOptions] = useState<string[]>([]);
+  const [creatorTypeOptions, setCreatorTypeOptions] = useState<string[]>([]);
 
   const [filters, setFilters] = useState({ ...DEFAULT_FILTERS });
+
+  // Lexicons ref — always up-to-date, used by NLP parser without being a dep
+  const lexiconsRef = useRef<Lexicons>(EMPTY_LEXICONS);
+  useEffect(() => {
+    lexiconsRef.current = { niches: nicheOptions, countries: countryOptions, cities: cityOptions, states: stateOptions, creatorTypes: creatorTypeOptions };
+  }, [nicheOptions, countryOptions, cityOptions, stateOptions, creatorTypeOptions]);
+
+  // Search cache: cacheKey -> results. Instant re-render on revisited searches.
+  const searchCache = useRef<Map<string, { creators: Creator[]; pagination: Pagination | null }>>(new Map());
+
+  // Request counter: cancel stale in-flight fetches (the core fix for the
+  // "filters reset after 1-2 secs" bug — stale responses no longer overwrite)
+  const requestId = useRef(0);
+
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -377,80 +393,121 @@ export default function DashboardPage() {
       .then(r => r.ok ? r.json() : { lists: [] })
       .then(d => setSavedLists(d.lists || []));
 
-    // Load all dropdown options from DB
     fetch("/api/creators/meta")
-      .then(r => r.ok ? r.json() : { niches: [], countries: [], cities: [] })
+      .then(r => r.ok ? r.json() : {})
       .then(d => {
-        setNicheOptions((d.primaryniches || d.niches || []).filter(Boolean).sort());
+        setNicheOptions((d.primaryniches || []).filter(Boolean).sort());
         setCountryOptions((d.countries || []).filter(Boolean).sort());
         setCityOptions((d.cities || []).filter(Boolean).sort());
+        setStateOptions((d.states || []).filter(Boolean).sort());
+        setCreatorTypeOptions((d.creatorTypes || []).filter(Boolean).sort());
       });
   }, []);
 
-  const fetchCreators = useCallback(async (q: string, p: number, f: typeof DEFAULT_FILTERS) => {
-    setLoading(true);
+  // ── Core fetch function ──────────────────────────────────────────────────────
+  const fetchCreators = useCallback(async (
+    q: string,
+    p: number,
+    f: typeof DEFAULT_FILTERS,
+    opts?: { background?: boolean; reqId?: number }
+  ) => {
+    const params = new URLSearchParams({ page: String(p), pageSize: "50", sortBy: f.sortBy, sortOrder: f.sortOrder });
+    if (q) params.set("q", q);
+    if (f.niche) params.set("niche", f.niche);
+    if (f.gender) params.set("gender", f.gender);
+    if (f.ageGroup) params.set("ageGroup", f.ageGroup);
+    if (f.country) params.set("country", f.country);
+    if (f.state) params.set("state", f.state);
+    if (f.city) params.set("city", f.city);
+    if (f.creatorSize) params.set("creatorSize", f.creatorSize);
+    if (f.creatorType) params.set("creatorType", f.creatorType);
+    if (f.collabStatus) params.set("collabStatus", f.collabStatus);
+    if (f.followersMin) params.set("followersMin", f.followersMin);
+    if (f.followersMax) params.set("followersMax", f.followersMax);
+    if (f.hasEmail) params.set("hasEmail", f.hasEmail);
+    if (f.hasTiktok) params.set("hasTiktok", f.hasTiktok);
+    if (f.hasYoutube) params.set("hasYoutube", f.hasYoutube);
+
+    const cacheKey = params.toString();
+    const myReqId = opts?.reqId ?? requestId.current;
+
+    // Instant cache hit: show old data immediately, revalidate in background
+    const cached = searchCache.current.get(cacheKey);
+    if (cached && !opts?.background) {
+      setCreators(cached.creators);
+      setPagination(cached.pagination);
+      setLoading(false);
+      // Background revalidate — but only if this request is still current
+      fetchCreators(q, p, f, { background: true, reqId: myReqId });
+      return;
+    }
+
+    if (!opts?.background) setLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: String(p),
-        pageSize: "50",
-        sortBy: f.sortBy,
-        sortOrder: f.sortOrder,
-      });
-      if (q) params.set("q", q);
-      if (f.niche) params.set("niche", f.niche);
-      if (f.gender) params.set("gender", f.gender);
-      if (f.ageGroup) params.set("ageGroup", f.ageGroup);
-      if (f.country) params.set("country", f.country);
-      if (f.city) params.set("city", f.city);
-      if (f.creatorSize) params.set("creatorSize", f.creatorSize);
-      if (f.creatorType) params.set("creatorType", f.creatorType);
-      if (f.collabStatus) params.set("collabStatus", f.collabStatus);
-      if (f.followersMin) params.set("followersMin", f.followersMin);
-      if (f.followersMax) params.set("followersMax", f.followersMax);
-      if (f.hasEmail) params.set("hasEmail", f.hasEmail);
-      if (f.hasTiktok) params.set("hasTiktok", f.hasTiktok);
-      if (f.hasYoutube) params.set("hasYoutube", f.hasYoutube);
-
       const res = await fetch(`/api/creators?${params}`);
+
+      // Discard if a newer request has since been issued
+      if (myReqId !== requestId.current) return;
+
       if (res.status === 401) { router.push("/login"); return; }
-      if (!res.ok) { showToast("Failed to load creators", "error"); return; }
+      if (!res.ok) { if (!opts?.background) showToast("Failed to load creators", "error"); return; }
       const data = await res.json();
-      setCreators(data.creators || []);
-      setPagination(data.pagination || null);
-    } finally { setLoading(false); }
-  }, [router]);
+      const result = { creators: data.creators || [], pagination: data.pagination || null };
 
-  // Parse NLP from rawQuery and merge into filters, then debounce fetch
-  useEffect(() => {
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => {
-      const { cleanQuery: cq, extractedFilters } = parseNaturalQuery(rawQuery);
-      setCleanQuery(cq);
-      const mergedFilters = { ...filters, ...extractedFilters };
-      // Only update filter state if NLP extracted something new
-      if (Object.keys(extractedFilters).length > 0) {
-        setFilters(prev => ({ ...prev, ...extractedFilters }));
+      // Update cache (LRU-style cap at 40 entries)
+      searchCache.current.delete(cacheKey);
+      searchCache.current.set(cacheKey, result);
+      if (searchCache.current.size > 40) {
+        const oldest = searchCache.current.keys().next().value;
+        if (oldest !== undefined) searchCache.current.delete(oldest);
       }
-      setPage(1);
-      fetchCreators(cq, 1, mergedFilters);
-    }, 400);
-    return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawQuery]);
 
-  // Re-fetch when manual filters change (not driven by NLP)
+      // Only update UI if this response is still for the current request
+      if (myReqId !== requestId.current) return;
+      setCreators(result.creators);
+      setPagination(result.pagination);
+    } finally {
+      if (!opts?.background && myReqId === requestId.current) setLoading(false);
+    }
+  }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── SINGLE unified search effect (rawQuery + filters) ────────────────────────
+  // Previously there were TWO effects (one for rawQuery, one for filters) both
+  // calling fetchCreators. The rawQuery effect also called setFilters(), which
+  // triggered the filters effect, causing a second stale fetch to overwrite the
+  // filtered results after ~200ms — exactly the "filters reset" bug.
+  //
+  // Fix: one effect, one request counter increment per trigger, AbortController
+  // via reqId so stale responses never update the UI.
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
+
     searchTimer.current = setTimeout(() => {
-      const { cleanQuery: cq } = parseNaturalQuery(rawQuery);
+      const { cleanQuery: cq, extractedFilters } = parseNaturalQuery(rawQuery, lexiconsRef.current);
+      cleanQueryRef.current = cq;
+
+      // Merge NLP extractions into current manual filters for the API call.
+      // We do NOT call setFilters here — that would re-trigger this effect.
+      const mergedFilters = { ...filters, ...extractedFilters };
+
+      // Increment request counter so any in-flight stale fetch knows to bail
+      const myReqId = ++requestId.current;
+
       setPage(1);
-      fetchCreators(cq, 1, filters);
-    }, 200);
+      fetchCreators(cq, 1, mergedFilters, { reqId: myReqId });
+    }, 300);
+
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters]);
+  }, [rawQuery, filters]);
 
-  useEffect(() => { fetchCreators(cleanQuery, page, filters); }, [page]); // eslint-disable-line
+  // ── Page change effect (no debounce — page clicks are intentional) ───────────
+  useEffect(() => {
+    if (page === 1) return; // page resets to 1 above; avoid double-fetch on filter change
+    const myReqId = ++requestId.current;
+    fetchCreators(cleanQueryRef.current, page, filters, { reqId: myReqId });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -463,21 +520,13 @@ export default function DashboardPage() {
 
   async function createList() {
     if (!newListName.trim()) return;
-    const res = await fetch("/api/lists", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newListName.trim() }),
-    });
+    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newListName.trim() }) });
     if (res.ok) { setNewListName(""); refreshLists(); showToast("List created"); }
     else showToast("Failed to create list", "error");
   }
 
   async function addToList(listId: string, creatorId: string) {
-    const res = await fetch(`/api/lists/${listId}/items`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ creatorId }),
-    });
+    const res = await fetch(`/api/lists/${listId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ creatorId }) });
     if (res.ok) { showToast("Creator added to list"); setAddToListCreator(null); refreshLists(); }
     else if (res.status === 409) { showToast("Already in this list", "info"); setAddToListCreator(null); }
     else showToast("Failed to add to list", "error");
@@ -487,8 +536,7 @@ export default function DashboardPage() {
     confirm({
       title: "Delete list",
       body: `"${name}" and all its creators will be permanently deleted. This cannot be undone.`,
-      confirmLabel: "Delete list",
-      danger: true,
+      confirmLabel: "Delete list", danger: true,
       onConfirm: async () => {
         const res = await fetch(`/api/lists/${id}`, { method: "DELETE" });
         if (res.ok) { refreshLists(); showToast("List deleted"); }
@@ -500,17 +548,14 @@ export default function DashboardPage() {
   function clearAllFilters() {
     setFilters({ ...DEFAULT_FILTERS });
     setRawQuery("");
-    setCleanQuery("");
+    cleanQueryRef.current = "";
   }
 
   function removeFilter(key: string) {
     setFilters(prev => ({ ...prev, [key]: "" }));
   }
 
-  const activeFiltersCount = Object.entries(filters).filter(
-    ([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== ""
-  ).length;
-
+  const activeFiltersCount = Object.entries(filters).filter(([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== "").length;
   const inputStyle = { background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" };
   const selectStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
 
@@ -538,11 +583,8 @@ export default function DashboardPage() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
               Search
             </a>
-            <button
-              onClick={() => setShowListsSidebar(!showListsSidebar)}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
-              style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}
-            >
+            <button onClick={() => setShowListsSidebar(!showListsSidebar)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
+              style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
               Saved Lists
               {savedLists.length > 0 && <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{savedLists.length}</span>}
@@ -559,13 +601,9 @@ export default function DashboardPage() {
               <p className="text-xs font-medium truncate" style={{ color: "var(--text-primary)" }}>{user?.fullName}</p>
               <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{user?.email}</p>
             </div>
-            <button
-              onClick={() => setShowSignOut(true)}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors"
-              style={{ color: "var(--text-secondary)" }}
+            <button onClick={() => setShowSignOut(true)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ color: "var(--text-secondary)" }}
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-            >
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
               Sign out
             </button>
@@ -587,33 +625,21 @@ export default function DashboardPage() {
                 </div>
               )}
               {savedLists.map(list => (
-                <div
-                  key={list.id}
-                  className="flex items-center gap-2 px-3 py-2.5 rounded-lg group cursor-pointer"
-                  style={{ background: "var(--surface-2)" }}
-                  onClick={() => router.push(`/dashboard/lists?id=${list.id}`)}
-                >
+                <div key={list.id} className="flex items-center gap-2 px-3 py-2.5 rounded-lg group cursor-pointer" style={{ background: "var(--surface-2)" }}
+                  onClick={() => router.push(`/dashboard/lists?id=${list.id}`)}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "var(--accent)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
                   <span className="text-sm flex-1 truncate">{list.name}</span>
                   <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface)", color: "var(--text-secondary)" }}>{list._count.items}</span>
-                  <button
-                    onClick={e => { e.stopPropagation(); handleDeleteList(list.id, list.name); }}
+                  <button onClick={e => { e.stopPropagation(); handleDeleteList(list.id, list.name); }}
                     className="ml-4 pl-4 opacity-0 group-hover:opacity-100 px-2 py-1 rounded text-xs font-medium transition-opacity"
-                    style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}
-                  >Delete</button>
+                    style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>Delete</button>
                 </div>
               ))}
             </div>
             <div className="p-3 border-t" style={{ borderColor: "var(--border)" }}>
               <div className="flex gap-2">
-                <input
-                  value={newListName}
-                  onChange={e => setNewListName(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && createList()}
-                  placeholder="New list name…"
-                  className="flex-1 px-3 py-1.5 rounded-lg text-sm outline-none"
-                  style={inputStyle}
-                />
+                <input value={newListName} onChange={e => setNewListName(e.target.value)} onKeyDown={e => e.key === "Enter" && createList()}
+                  placeholder="New list name…" className="flex-1 px-3 py-1.5 rounded-lg text-sm outline-none" style={inputStyle} />
                 <button onClick={createList} disabled={!newListName.trim()} className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>Create</button>
               </div>
             </div>
@@ -628,33 +654,20 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3">
               <div className="flex-1 relative">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none" style={{ color: "var(--text-secondary)" }}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-                <input
-                  value={rawQuery}
-                  onChange={e => setRawQuery(e.target.value)}
-                  placeholder='Try "Germany food creators 20k+ followers female age 20-30"'
-                  className="w-full pl-10 pr-10 py-2.5 rounded-lg text-sm outline-none"
-                  style={inputStyle}
-                />
+                <input value={rawQuery} onChange={e => setRawQuery(e.target.value)}
+                  placeholder='Try "Germany food creators 20k+ female age 20-30 with email"'
+                  className="w-full pl-10 pr-10 py-2.5 rounded-lg text-sm outline-none" style={inputStyle} />
                 {rawQuery && (
                   <button onClick={clearAllFilters} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "var(--text-secondary)" }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                   </button>
                 )}
               </div>
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium"
-                style={{
-                  background: showFilters ? "rgba(99,102,241,0.15)" : "var(--surface-2)",
-                  border: `1px solid ${showFilters ? "var(--accent)" : "var(--border)"}`,
-                  color: showFilters ? "var(--accent)" : "var(--text-secondary)",
-                }}
-              >
+              <button onClick={() => setShowFilters(!showFilters)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium"
+                style={{ background: showFilters ? "rgba(99,102,241,0.15)" : "var(--surface-2)", border: `1px solid ${showFilters ? "var(--accent)" : "var(--border)"}`, color: showFilters ? "var(--accent)" : "var(--text-secondary)" }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
                 Filters
-                {activeFiltersCount > 0 && (
-                  <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: "var(--accent)", color: "white" }}>{activeFiltersCount}</span>
-                )}
+                {activeFiltersCount > 0 && <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: "var(--accent)", color: "white" }}>{activeFiltersCount}</span>}
               </button>
             </div>
 
@@ -662,7 +675,6 @@ export default function DashboardPage() {
             {showFilters && (
               <div className="mt-4 p-4 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
 
-                {/* Niche — fixed: shows label text */}
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Niche</label>
                   <select value={filters.niche} onChange={e => setFilters(p => ({ ...p, niche: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -671,7 +683,6 @@ export default function DashboardPage() {
                   </select>
                 </div>
 
-                {/* Country — dropdown from DB */}
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Country</label>
                   <select value={filters.country} onChange={e => setFilters(p => ({ ...p, country: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -680,7 +691,14 @@ export default function DashboardPage() {
                   </select>
                 </div>
 
-                {/* City — dropdown from DB (filtered by selected country if possible) */}
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>State</label>
+                  <select value={filters.state} onChange={e => setFilters(p => ({ ...p, state: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
+                    <option value="">All states</option>
+                    {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>City</label>
                   <select value={filters.city} onChange={e => setFilters(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -689,16 +707,12 @@ export default function DashboardPage() {
                   </select>
                 </div>
 
-                {/* Creator Type */}
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Type</label>
-                  <input
-                    value={filters.creatorType}
-                    onChange={e => setFilters(p => ({ ...p, creatorType: e.target.value }))}
-                    placeholder="ugc, influencer…"
-                    className="w-full px-3 py-1.5 rounded-lg text-sm outline-none"
-                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                  />
+                  <select value={filters.creatorType} onChange={e => setFilters(p => ({ ...p, creatorType: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
+                    <option value="">Any type</option>
+                    {creatorTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
                 </div>
 
                 <div>
@@ -740,11 +754,7 @@ export default function DashboardPage() {
                   <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))} placeholder="500000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
                 </div>
 
-                {[
-                  { label: "Has Email", key: "hasEmail" },
-                  { label: "Has TikTok", key: "hasTiktok" },
-                  { label: "Has YouTube", key: "hasYoutube" },
-                ].map(f => (
+                {[{ label: "Has Email", key: "hasEmail" }, { label: "Has TikTok", key: "hasTiktok" }, { label: "Has YouTube", key: "hasYoutube" }].map(f => (
                   <div key={f.key}>
                     <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{f.label}</label>
                     <select value={filters[f.key as keyof typeof DEFAULT_FILTERS]} onChange={e => setFilters(p => ({ ...p, [f.key]: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -757,9 +767,7 @@ export default function DashboardPage() {
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Sort By</label>
                   <select value={filters.sortBy} onChange={e => setFilters(p => ({ ...p, sortBy: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                     <option value="followerCount">Followers</option>
-                    <option value="username">Username</option>
                     <option value="lastUpdated">Last Updated</option>
-                    <option value="latestPostDate">Latest Post</option>
                   </select>
                 </div>
 
@@ -771,9 +779,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="col-span-full flex justify-end">
-                  <button onClick={clearAllFilters} className="px-4 py-1.5 rounded-lg text-sm" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
-                    Clear all filters
-                  </button>
+                  <button onClick={clearAllFilters} className="px-4 py-1.5 rounded-lg text-sm" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Clear all filters</button>
                 </div>
               </div>
             )}
@@ -813,9 +819,7 @@ export default function DashboardPage() {
                 <h3 className="font-medium mb-1">No creators found</h3>
                 <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Try adjusting your search or filters</p>
                 {activeFiltersCount > 0 && (
-                  <button onClick={clearAllFilters} className="mt-4 px-4 py-2 rounded-lg text-sm" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--accent)" }}>
-                    Clear all filters
-                  </button>
+                  <button onClick={clearAllFilters} className="mt-4 px-4 py-2 rounded-lg text-sm" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--accent)" }}>Clear all filters</button>
                 )}
               </div>
             ) : (
@@ -849,9 +853,7 @@ export default function DashboardPage() {
                     </div>
 
                     {c.totalCollaborationsInRecent25 !== null && c.totalCollaborationsInRecent25 !== undefined && (
-                      <div className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                        🤝 {c.totalCollaborationsInRecent25} collabs in last 25 posts
-                      </div>
+                      <div className="text-xs" style={{ color: "var(--text-secondary)" }}>🤝 {c.totalCollaborationsInRecent25} collabs in last 25 posts</div>
                     )}
 
                     <div className="flex gap-1.5">
@@ -910,14 +912,8 @@ export default function DashboardPage() {
                 </div>
               )}
               <div className="flex gap-2">
-                <input
-                  value={newListName}
-                  onChange={e => setNewListName(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && createList()}
-                  placeholder="Or create new list…"
-                  className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-                  style={inputStyle}
-                />
+                <input value={newListName} onChange={e => setNewListName(e.target.value)} onKeyDown={e => e.key === "Enter" && createList()}
+                  placeholder="Or create new list…" className="flex-1 px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} />
                 <button onClick={createList} className="px-3 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>Create</button>
               </div>
             </div>
