@@ -22,6 +22,7 @@ interface Creator {
 
 interface ListItem { id: string; creatorId: string; addedAt: string; creator: Creator | null; }
 interface SavedList { id: string; name: string; items: ListItem[]; }
+interface SavedListSummary { id: string; name: string; _count: { items: number }; }
 interface ConfirmDialog { title: string; body: string; onConfirm: () => void; confirmLabel?: string; danger?: boolean; }
 interface Toast { id: number; msg: string; type: "success" | "error" | "info"; }
 
@@ -40,19 +41,10 @@ function displayName(c: Creator): string {
   return c.fullName || [c.firstName].filter(Boolean).join(" ") || c.username || "—";
 }
 
-// ─── Confirm Dialog ───────────────────────────────────────────────────────────
 function ConfirmModal({ dialog, onClose }: { dialog: ConfirmDialog; onClose: () => void }) {
   return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.7)" }}
-      onClick={onClose}
-    >
-      <div
-        className="rounded-2xl p-6 w-[360px] shadow-2xl"
-        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-        onClick={e => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div className="rounded-2xl p-6 w-[360px] shadow-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
         <div className="flex items-start gap-3 mb-4">
           {dialog.danger && (
             <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: "rgba(239,68,68,0.15)" }}>
@@ -65,20 +57,8 @@ function ConfirmModal({ dialog, onClose }: { dialog: ConfirmDialog; onClose: () 
           </div>
         </div>
         <div className="flex gap-2 justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm font-medium"
-            style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => { dialog.onConfirm(); onClose(); }}
-            className="px-4 py-2 rounded-lg text-sm font-medium"
-            style={{ background: dialog.danger ? "#ef4444" : "var(--accent)", color: "white" }}
-          >
-            {dialog.confirmLabel ?? "Confirm"}
-          </button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Cancel</button>
+          <button onClick={() => { dialog.onConfirm(); onClose(); }} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: dialog.danger ? "#ef4444" : "var(--accent)", color: "white" }}>{dialog.confirmLabel ?? "Confirm"}</button>
         </div>
       </div>
     </div>
@@ -89,16 +69,8 @@ function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 items-center pointer-events-none">
       {toasts.map(t => (
-        <div
-          key={t.id}
-          className="flex items-center gap-3 px-5 py-3 rounded-full text-sm font-medium shadow-2xl pointer-events-auto"
-          style={{
-            background: t.type === "error" ? "#ef4444" : t.type === "info" ? "var(--surface-2)" : "var(--accent)",
-            color: "white",
-            border: t.type === "info" ? "1px solid var(--border)" : "none",
-            animation: "slideUp 0.2s ease",
-          }}
-        >
+        <div key={t.id} className="flex items-center gap-3 px-5 py-3 rounded-full text-sm font-medium shadow-2xl pointer-events-auto"
+          style={{ background: t.type === "error" ? "#ef4444" : t.type === "info" ? "var(--surface-2)" : "var(--accent)", color: "white", border: t.type === "info" ? "1px solid var(--border)" : "none", animation: "slideUp 0.2s ease" }}>
           {t.msg}
         </div>
       ))}
@@ -112,6 +84,7 @@ function ListPageInner() {
   const listId = searchParams.get("id");
 
   const [list, setList] = useState<SavedList | null>(null);
+  const [allLists, setAllLists] = useState<SavedListSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [newName, setNewName] = useState("");
@@ -121,6 +94,7 @@ function ListPageInner() {
   const [exporting, setExporting] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [deletingList, setDeletingList] = useState(false);
+  const [newListName, setNewListName] = useState("");
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -128,9 +102,7 @@ function ListPageInner() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3200);
   }
 
-  function confirm(dialog: ConfirmDialog) {
-    setConfirmDialog(dialog);
-  }
+  function confirm(dialog: ConfirmDialog) { setConfirmDialog(dialog); }
 
   async function fetchList() {
     if (!listId) return;
@@ -143,9 +115,36 @@ function ListPageInner() {
     setLoading(false);
   }
 
-  useEffect(() => { fetchList(); }, [listId]);
+  async function fetchAllLists() {
+    const res = await fetch("/api/lists");
+    if (res.ok) {
+      const data = await res.json();
+      setAllLists(data.lists || []);
+    }
+  }
 
-  // ── Rename (optimistic, instant) ──────────────────────────────────────────
+  useEffect(() => {
+    fetchList();
+    fetchAllLists();
+  }, [listId]);
+
+  function goBackToDashboard() {
+    // Signal dashboard to restore sidebar
+    try { sessionStorage.setItem("lists_sidebar_open", "true"); } catch {}
+    router.push("/dashboard");
+  }
+
+  function openList(id: string) {
+    router.push(`/dashboard/lists?id=${id}`);
+  }
+
+  async function createList() {
+    if (!newListName.trim()) return;
+    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newListName.trim() }) });
+    if (res.ok) { setNewListName(""); fetchAllLists(); showToast("List created"); }
+    else showToast("Failed to create list", "error");
+  }
+
   function saveRename() {
     if (!listId || !list) return;
     const trimmed = newName.trim();
@@ -158,7 +157,6 @@ function ListPageInner() {
       confirmLabel: "Rename",
       onConfirm: () => {
         const previousName = list.name;
-        // Update instantly, don't wait on the network
         setList({ ...list, name: trimmed });
         setEditingName(false);
         setSavingName(true);
@@ -168,21 +166,13 @@ function ListPageInner() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: trimmed }),
         })
-          .then(res => {
-            if (!res.ok) throw new Error();
-            showToast("List renamed");
-          })
-          .catch(() => {
-            setList(prev => prev ? { ...prev, name: previousName } : prev);
-            setNewName(previousName);
-            showToast("Failed to rename list", "error");
-          })
+          .then(res => { if (!res.ok) throw new Error(); showToast("List renamed"); fetchAllLists(); })
+          .catch(() => { setList(prev => prev ? { ...prev, name: previousName } : prev); setNewName(previousName); showToast("Failed to rename list", "error"); })
           .finally(() => setSavingName(false));
       },
     });
   }
 
-  // ── Remove creator (optimistic, instant) ──────────────────────────────────
   function handleRemoveCreator(item: ListItem) {
     if (!listId || !list) return;
     const c = item.creator;
@@ -196,26 +186,16 @@ function ListPageInner() {
       onConfirm: () => {
         const creatorId = item.creatorId;
         setRemovingId(item.id);
-        // Remove instantly from the UI
         setList(prev => prev ? { ...prev, items: prev.items.filter(i => i.id !== item.id) } : prev);
 
-        fetch(`/api/lists/${listId}/items?creatorId=${encodeURIComponent(creatorId)}`, {
-          method: "DELETE",
-        })
-          .then(res => {
-            if (!res.ok) throw new Error();
-            showToast("Creator removed");
-          })
-          .catch(() => {
-            setList(prev => prev ? { ...prev, items: [...prev.items, item] } : prev);
-            showToast("Failed to remove creator", "error");
-          })
+        fetch(`/api/lists/${listId}/items?creatorId=${encodeURIComponent(creatorId)}`, { method: "DELETE" })
+          .then(res => { if (!res.ok) throw new Error(); showToast("Creator removed"); fetchAllLists(); })
+          .catch(() => { setList(prev => prev ? { ...prev, items: [...prev.items, item] } : prev); showToast("Failed to remove creator", "error"); })
           .finally(() => setRemovingId(null));
       },
     });
   }
 
-  // ── Delete list ────────────────────────────────────────────────────────────
   function handleDeleteList() {
     if (!listId || !list) return;
     confirm({
@@ -226,14 +206,8 @@ function ListPageInner() {
       onConfirm: () => {
         setDeletingList(true);
         fetch(`/api/lists/${listId}`, { method: "DELETE" })
-          .then(res => {
-            if (!res.ok) throw new Error();
-            router.push("/dashboard");
-          })
-          .catch(() => {
-            showToast("Failed to delete list", "error");
-            setDeletingList(false);
-          });
+          .then(res => { if (!res.ok) throw new Error(); goBackToDashboard(); })
+          .catch(() => { showToast("Failed to delete list", "error"); setDeletingList(false); });
       },
     });
   }
@@ -266,159 +240,228 @@ function ListPageInner() {
   if (!list) return null;
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--background)" }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
       <style>{`
         @keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        * { -webkit-user-select: none; user-select: none; }
+        input, textarea { -webkit-user-select: text; user-select: text; }
       `}</style>
 
-      {/* Header */}
-      <div className="border-b px-6 py-4 flex items-center gap-4" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-        <button onClick={() => router.push("/dashboard")} className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polyline points="15 18 9 12 15 6"/></svg>
-          Dashboard
-        </button>
-        <span style={{ color: "var(--border)" }}>·</span>
-
-        {/* Editable name */}
-        {editingName ? (
+      {/* Sidebar - persists from dashboard */}
+      <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
+        <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
           <div className="flex items-center gap-2">
-            <input
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") saveRename(); if (e.key === "Escape") { setEditingName(false); setNewName(list.name); } }}
-              autoFocus
-              className="px-3 py-1 rounded-lg text-sm font-semibold outline-none"
-              style={{ background: "var(--surface-2)", border: "1px solid var(--accent)", color: "var(--text-primary)", minWidth: "200px" }}
-            />
-            <button onClick={saveRename} disabled={savingName} className="px-3 py-1 rounded-lg text-xs font-medium disabled:opacity-50" style={{ background: "var(--accent)", color: "white" }}>
-              {savingName ? "Saving…" : "Save"}
-            </button>
-            <button onClick={() => { setEditingName(false); setNewName(list.name); }} className="px-3 py-1 rounded-lg text-xs" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Cancel</button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <h1 className="font-semibold">{list.name}</h1>
-            <button onClick={() => setEditingName(true)} style={{ color: "var(--text-secondary)" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            </button>
-          </div>
-        )}
-
-        <span className="text-sm ml-1" style={{ color: "var(--text-secondary)" }}>{list.items.length} creators</span>
-
-        {/* Right side actions */}
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={exportCSV}
-            disabled={exporting || list.items.length === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
-            style={{ background: "var(--accent)", color: "white" }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            {exporting ? "Exporting…" : "Export CSV"}
-          </button>
-          <button
-            onClick={handleDeleteList}
-            disabled={deletingList}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
-            style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-            {deletingList ? "Deleting…" : "Delete list"}
-          </button>
-        </div>
-      </div>
-
-      {/* Creators table */}
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        {list.items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: "var(--surface)" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-8 h-8" style={{ color: "var(--text-secondary)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "var(--accent)" }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-4 h-4"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </div>
-            <h3 className="font-medium mb-1">No creators in this list</h3>
-            <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>Go to search and add creators using the + List button</p>
-            <button onClick={() => router.push("/dashboard")} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>
-              Go to search
+            <span className="font-semibold text-sm">CreatorDiscover</span>
+          </div>
+        </div>
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+          <a href="/dashboard" className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ color: "var(--text-secondary)" }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            Search
+          </a>
+
+          {/* Saved Lists section - always expanded on list page */}
+          <div>
+            <div className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium" style={{ color: "var(--accent)", background: "rgba(99,102,241,0.1)" }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+              Saved Lists
+              {allLists.length > 0 && <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{allLists.length}</span>}
+            </div>
+            <div className="mt-1 ml-3 space-y-0.5">
+              {allLists.map(l => (
+                <button
+                  key={l.id}
+                  onClick={() => openList(l.id)}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-all"
+                  style={{
+                    color: l.id === listId ? "var(--accent)" : "var(--text-secondary)",
+                    background: l.id === listId ? "rgba(99,102,241,0.1)" : "transparent",
+                    fontWeight: l.id === listId ? 600 : 400,
+                  }}
+                  onMouseEnter={e => { if (l.id !== listId) { (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; } }}
+                  onMouseLeave={e => { if (l.id !== listId) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; } }}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 flex-shrink-0" style={{ color: l.id === listId ? "var(--accent)" : "var(--text-secondary)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                  <span className="flex-1 truncate">{l.name}</span>
+                  <span className="text-xs px-1 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", minWidth: "1.5rem", textAlign: "center" }}>{l._count.items}</span>
+                </button>
+              ))}
+              <div className="flex gap-1.5 px-1 pt-2 pb-1">
+                <input
+                  value={newListName}
+                  onChange={e => setNewListName(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && createList()}
+                  placeholder="New list…"
+                  className="flex-1 px-2 py-1 rounded text-xs outline-none"
+                  style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                />
+                <button onClick={createList} disabled={!newListName.trim()} className="px-2 py-1 rounded text-xs font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>+</button>
+              </div>
+            </div>
+          </div>
+        </nav>
+      </aside>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Header */}
+        <div className="border-b px-6 py-4 flex items-center gap-4" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
+          <button onClick={goBackToDashboard} className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polyline points="15 18 9 12 15 6"/></svg>
+            Dashboard
+          </button>
+          <span style={{ color: "var(--border)" }}>·</span>
+
+          {/* Editable name */}
+          {editingName ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") saveRename(); if (e.key === "Escape") { setEditingName(false); setNewName(list.name); } }}
+                autoFocus
+                className="px-3 py-1 rounded-lg text-sm font-semibold outline-none"
+                style={{ background: "var(--surface-2)", border: "1px solid var(--accent)", color: "var(--text-primary)", minWidth: "200px" }}
+              />
+              <button onClick={saveRename} disabled={savingName} className="px-3 py-1 rounded-lg text-xs font-medium disabled:opacity-50" style={{ background: "var(--accent)", color: "white" }}>
+                {savingName ? "Saving…" : "Save"}
+              </button>
+              <button onClick={() => { setEditingName(false); setNewName(list.name); }} className="px-3 py-1 rounded-lg text-xs" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Cancel</button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <h1 className="font-semibold">{list.name}</h1>
+              <button onClick={() => setEditingName(true)} style={{ color: "var(--text-secondary)" }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
+            </div>
+          )}
+
+          <span className="text-sm ml-1" style={{ color: "var(--text-secondary)" }}>{list.items.length} creators</span>
+
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={exportCSV}
+              disabled={exporting || list.items.length === 0}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
+              style={{ background: "var(--accent)", color: "white" }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              {exporting ? "Exporting…" : "Export CSV"}
+            </button>
+            <button
+              onClick={handleDeleteList}
+              disabled={deletingList}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
+              style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+              {deletingList ? "Deleting…" : "Delete list"}
             </button>
           </div>
-        ) : (
-          <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--border)" }}>
-            <table className="w-full text-sm">
-              <thead>
-                <tr style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-                  {["Creator", "Niche", "Followers", "Location", "Gender", "Status", "Added", ""].map((h, i) => (
-                    <th key={i} className="px-4 py-3 text-left text-xs font-medium" style={{ color: "var(--text-secondary)" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {list.items.filter(item => item.creator !== null).map(item => {
-                  const c = item.creator as Creator;
-                  return (
-                    <tr key={item.id} style={{ borderBottom: "1px solid var(--border)", background: "var(--surface)", opacity: removingId === item.id ? 0.4 : 1 }}>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          {c.profilePicture ? (
-                            <img src={c.profilePicture} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-medium" style={{ background: "var(--accent)", color: "white" }}>
-                              {(c.username || "?").charAt(0).toUpperCase()}
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <p className="font-medium truncate">{c.username || "—"}</p>
-                            <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{displayName(c)}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {c.nichePrimary && (
-                          <span className="px-2 py-0.5 rounded-full text-xs" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>{c.nichePrimary}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-medium">{fmtNum(c.followerCount)}</td>
-                      <td className="px-4 py-3 text-xs" style={{ color: "var(--text-secondary)" }}>
-                        {[c.addressCity, c.addressCountry].filter(Boolean).join(", ") || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-xs capitalize" style={{ color: "var(--text-secondary)" }}>{c.gender || "—"}</td>
-                      <td className="px-4 py-3">
-                        {c.collaborationStatus && (
-                          <span className="px-2 py-0.5 rounded-full text-xs capitalize" style={{
-                            background: ["open","active"].includes(c.collaborationStatus.toLowerCase()) ? "rgba(34,197,94,0.15)" : "var(--surface-2)",
-                            color: ["open","active"].includes(c.collaborationStatus.toLowerCase()) ? "#22c55e" : "var(--text-secondary)",
-                          }}>{c.collaborationStatus}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-xs" style={{ color: "var(--text-secondary)" }}>
-                        {new Date(item.addedAt).toLocaleDateString()}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => c.username && router.push(`/dashboard/creators/${c.username}`)}
-                            className="px-2 py-1 rounded text-xs"
-                            style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
-                          >
-                            View
-                          </button>
-                          <button
-                            onClick={() => handleRemoveCreator(item)}
-                            disabled={removingId === item.id}
-                            className="px-2 py-1 rounded text-xs font-medium disabled:opacity-50"
-                            style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </td>
+        </div>
+
+        {/* Creators table */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-6xl mx-auto px-6 py-8">
+            {list.items.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 text-center">
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: "var(--surface)" }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-8 h-8" style={{ color: "var(--text-secondary)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                </div>
+                <h3 className="font-medium mb-1">No creators in this list</h3>
+                <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>Go to search and add creators using the + List button</p>
+                <button onClick={goBackToDashboard} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>
+                  Go to search
+                </button>
+              </div>
+            ) : (
+              <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--border)" }}>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+                      {["Creator", "Niche", "Followers", "Location", "Gender", "Collab Status", "Added", "Actions"].map((h, i) => (
+                        <th key={i} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>{h}</th>
+                      ))}
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {list.items.filter(item => item.creator !== null).map(item => {
+                      const c = item.creator as Creator;
+                      return (
+                        <tr
+                          key={item.id}
+                          style={{ borderBottom: "1px solid var(--border)", background: "var(--surface)", opacity: removingId === item.id ? 0.4 : 1 }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = "var(--surface-2)"; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = "var(--surface)"; }}
+                        >
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              {c.profilePicture ? (
+                                <img src={c.profilePicture} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                              ) : (
+                                <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-medium" style={{ background: "var(--accent)", color: "white" }}>
+                                  {(c.username || "?").charAt(0).toUpperCase()}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <p className="font-medium truncate">{c.username || "—"}</p>
+                                <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{displayName(c)}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            {c.nichePrimary && (
+                              <span className="px-2 py-0.5 rounded-full text-xs" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>{c.nichePrimary}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-medium">{fmtNum(c.followerCount)}</td>
+                          <td className="px-4 py-3 text-xs" style={{ color: "var(--text-secondary)" }}>
+                            {[c.addressCity, c.addressCountry].filter(Boolean).join(", ") || "—"}
+                          </td>
+                          <td className="px-4 py-3 text-xs capitalize" style={{ color: "var(--text-secondary)" }}>{c.gender || "—"}</td>
+                          <td className="px-4 py-3">
+                            {c.collaborationStatus && (
+                              <span className="px-2 py-0.5 rounded-full text-xs capitalize" style={{
+                                background: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "rgba(34,197,94,0.15)" : "var(--surface-2)",
+                                color: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "#22c55e" : "var(--text-secondary)",
+                              }}>{c.collaborationStatus}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-xs" style={{ color: "var(--text-secondary)" }}>
+                            {new Date(item.addedAt).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => c.username && router.push(`/dashboard/creators/${c.username}`)}
+                                className="px-2 py-1 rounded text-xs font-medium"
+                                style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+                              >
+                                View
+                              </button>
+                              <button
+                                onClick={() => handleRemoveCreator(item)}
+                                disabled={removingId === item.id}
+                                className="px-2 py-1 rounded text-xs font-medium disabled:opacity-50"
+                                style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       <ToastStack toasts={toasts} />

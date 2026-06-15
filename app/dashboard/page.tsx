@@ -55,7 +55,6 @@ const sizeColor: Record<string, string> = {
   "Mega-Influencer": "#ef4444",
 };
 
-// ─── Default filters ──────────────────────────────────────────────────────────
 const DEFAULT_FILTERS = {
   niche: "", gender: "", ageGroup: "", country: "", state: "", city: "",
   creatorSize: "", creatorType: "", collabStatus: "",
@@ -64,7 +63,6 @@ const DEFAULT_FILTERS = {
   sortBy: "followerCount", sortOrder: "desc",
 };
 
-// ─── NLP query parser ─────────────────────────────────────────────────────────
 interface Lexicons {
   niches: string[];
   countries: string[];
@@ -102,7 +100,6 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     return null;
   }
 
-  // ── Follower range ──
   const parseFollowerVal = (s: string): number | null => {
     const m = s.match(/^([\d.]+)(k|m)?$/);
     if (!m) return null;
@@ -125,7 +122,6 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     if ((t === "followers" || t === "follower") && i > 0 && !consumed.has(i - 1)) consumed.add(i);
   }
 
-  // ── Age group ──
   function ageRangeToGroup(lo: number, hi: number): string | null {
     if (lo <= 18 && hi <= 24) return "18-24";
     if (lo >= 25 && hi <= 34) return "25-34";
@@ -167,28 +163,23 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     if (m) { const lo = parseInt(m[1]); const hi = parseInt(m[2]); const g = ageRangeToGroup(Math.min(lo, hi), Math.max(lo, hi)); if (g) { extracted.ageGroup = g; consumed.add(i); } }
   }
 
-  // ── Gender ──
   const genderMap: Record<string, string> = { female: "female", women: "female", woman: "female", girl: "female", girls: "female", male: "male", men: "male", man: "male", boy: "male", boys: "male" };
   for (let i = 0; i < tokens.length; i++) { if (consumed.has(i)) continue; if (genderMap[tokens[i]]) { extracted.gender = genderMap[tokens[i]]; consumed.add(i); break; } }
 
-  // ── Creator size ──
   const sizeKeywords: Record<string, string> = { nano: "Nano-Influencer", micro: "Micro-Influencer", "mid-tier": "Mid-tier", mid: "Mid-tier", macro: "Macro-Influencer", mega: "Mega-Influencer" };
   for (let i = 0; i < tokens.length; i++) { if (consumed.has(i)) continue; if (sizeKeywords[tokens[i]]) { extracted.creatorSize = sizeKeywords[tokens[i]]; consumed.add(i); break; } }
 
-  // ── Collab status ──
   for (let i = 0; i < tokens.length; i++) {
     if (consumed.has(i)) continue;
     if (tokens[i] === "open") { extracted.collabStatus = "open"; consumed.add(i); break; }
     if (tokens[i] === "closed") { extracted.collabStatus = "closed"; consumed.add(i); break; }
   }
 
-  // ── Location prefix words ──
   for (let i = 0; i < tokens.length - 1; i++) {
     if (consumed.has(i)) continue;
     if ((tokens[i] === "located" || tokens[i] === "based") && tokens[i + 1] === "in") { consumed.add(i); consumed.add(i + 1); }
   }
 
-  // ── Explicit field: value pairs ──
   const fieldPrefixes: Record<string, keyof typeof extracted> = { country: "country", state: "state", city: "city", niche: "niche", type: "creatorType" };
   for (let i = 0; i < tokens.length - 1; i++) {
     if (consumed.has(i)) continue;
@@ -204,7 +195,6 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     }
   }
 
-  // ── Lexicon phrase matching ──
   if (!extracted.country) { const m = findAndConsumeLexiconMatch(lexicons.countries); if (m) extracted.country = m; }
   if (!extracted.state)   { const m = findAndConsumeLexiconMatch(lexicons.states);    if (m) extracted.state = m; }
   if (!extracted.city)    { const m = findAndConsumeLexiconMatch(lexicons.cities);    if (m) extracted.city = m; }
@@ -220,7 +210,6 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     if (!extracted.niche) { const m = findAndConsumeLexiconMatch(lexicons.niches); if (m) extracted.niche = m; }
   }
 
-  // ── Social presence: "has email", "with tiktok", "no youtube" ──
   const socialKeywords: Record<string, keyof typeof DEFAULT_FILTERS> = { tiktok: "hasTiktok", youtube: "hasYoutube", yt: "hasYoutube", email: "hasEmail" };
   for (let i = 0; i < tokens.length; i++) {
     if (consumed.has(i)) continue;
@@ -235,7 +224,6 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     }
   }
 
-  // ── Stop words ──
   const stopWords = new Set(["creators", "creator", "influencer", "influencers", "with", "and", "the", "in", "from", "a", "an", "of", "for", "between", "has", "have", "is", "are", "who", "located", "based", "to"]);
   for (let i = 0; i < tokens.length; i++) { if (stopWords.has(tokens[i])) consumed.add(i); }
 
@@ -243,7 +231,6 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
   return { cleanQuery, extractedFilters: extracted };
 }
 
-// ─── Toast system ─────────────────────────────────────────────────────────────
 let toastCounter = 0;
 function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
@@ -260,7 +247,6 @@ function ToastStack({ toasts }: { toasts: Toast[] }) {
   );
 }
 
-// ─── Confirm Dialog ───────────────────────────────────────────────────────────
 function ConfirmModal({ dialog, onClose }: { dialog: ConfirmDialog; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={onClose}>
@@ -285,7 +271,6 @@ function ConfirmModal({ dialog, onClose }: { dialog: ConfirmDialog; onClose: () 
   );
 }
 
-// ─── Sign Out Modal ───────────────────────────────────────────────────────────
 function SignOutModal({ onConfirm, onClose, userName }: { onConfirm: () => void; onClose: () => void; userName: string }) {
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={onClose}>
@@ -298,6 +283,86 @@ function SignOutModal({ onConfirm, onClose, userName }: { onConfirm: () => void;
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Stay</button>
           <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>Sign out</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Multi-select Add to List Modal ──────────────────────────────────────────
+function AddToListModal({
+  selectedCreators,
+  savedLists,
+  onClose,
+  onAddToList,
+  onCreateList,
+  newListName,
+  setNewListName,
+}: {
+  selectedCreators: string[];
+  savedLists: SavedList[];
+  onClose: () => void;
+  onAddToList: (listId: string) => void;
+  onCreateList: () => void;
+  newListName: string;
+  setNewListName: (v: string) => void;
+}) {
+  const count = selectedCreators.length;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
+      <div className="rounded-2xl p-6 w-80 shadow-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-semibold">Add to list</h3>
+          <button onClick={onClose} style={{ color: "var(--text-secondary)" }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: "var(--text-secondary)" }}>
+          Adding <span style={{ color: "var(--accent)", fontWeight: 600 }}>{count} creator{count !== 1 ? "s" : ""}</span> to a list
+        </p>
+
+        {/* List headers */}
+        {savedLists.length > 0 && (
+          <div className="flex items-center justify-between px-3 mb-1">
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>List Name</span>
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>Creators</span>
+          </div>
+        )}
+
+        {savedLists.length === 0 ? (
+          <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>No lists yet. Create one below.</p>
+        ) : (
+          <div className="space-y-1.5 mb-4 max-h-52 overflow-y-auto">
+            {savedLists.map(list => (
+              <button
+                key={list.id}
+                onClick={() => onAddToList(list.id)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all"
+                style={{ background: "var(--surface-2)", color: "var(--text-primary)", border: "1px solid transparent" }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--accent)"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(99,102,241,0.1)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "transparent"; (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "var(--accent)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                <span className="flex-1 truncate font-medium">{list.name}</span>
+                <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface)", color: "var(--text-secondary)" }}>{list._count.items}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="pt-3 border-t" style={{ borderColor: "var(--border)" }}>
+          <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Create new list</p>
+          <div className="flex gap-2">
+            <input
+              value={newListName}
+              onChange={e => setNewListName(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && onCreateList()}
+              placeholder="List name…"
+              className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+              style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+            />
+            <button onClick={onCreateList} disabled={!newListName.trim()} className="px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>Create</button>
+          </div>
         </div>
       </div>
     </div>
@@ -330,6 +395,20 @@ function ActiveFilterPills({ filters, onRemove }: { filters: typeof DEFAULT_FILT
   );
 }
 
+// ─── State persistence key ────────────────────────────────────────────────────
+const DASHBOARD_STATE_KEY = "dashboard_state";
+
+function saveDashboardState(state: { rawQuery: string; filters: typeof DEFAULT_FILTERS; page: number }) {
+  try { sessionStorage.setItem(DASHBOARD_STATE_KEY, JSON.stringify(state)); } catch {}
+}
+
+function loadDashboardState(): { rawQuery: string; filters: typeof DEFAULT_FILTERS; page: number } | null {
+  try {
+    const s = sessionStorage.getItem(DASHBOARD_STATE_KEY);
+    return s ? JSON.parse(s) : null;
+  } catch { return null; }
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const router = useRouter();
@@ -338,16 +417,37 @@ export default function DashboardPage() {
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [rawQuery, setRawQuery] = useState("");
-  // cleanQuery is derived from rawQuery after NLP; kept in ref so page-change
-  // effect can read it without being a dependency that re-fires the search effect
+  // Restore state from sessionStorage on mount
+  const restoredState = useRef<ReturnType<typeof loadDashboardState>>(null);
+  if (restoredState.current === undefined as unknown as null) {
+    restoredState.current = null;
+  }
+
+  const [rawQuery, setRawQuery] = useState(() => {
+    if (typeof window !== "undefined") {
+      const s = loadDashboardState();
+      return s?.rawQuery ?? "";
+    }
+    return "";
+  });
+
   const cleanQueryRef = useRef("");
 
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => {
+    if (typeof window !== "undefined") {
+      const s = loadDashboardState();
+      return s?.page ?? 1;
+    }
+    return 1;
+  });
+
   const [showFilters, setShowFilters] = useState(false);
   const [showListsSidebar, setShowListsSidebar] = useState(false);
   const [savedLists, setSavedLists] = useState<SavedList[]>([]);
-  const [addToListCreator, setAddToListCreator] = useState<string | null>(null);
+
+  // Multi-select state: set of creator usernames/pks selected
+  const [selectedCreators, setSelectedCreators] = useState<Set<string>>(new Set());
+  const [showAddToListModal, setShowAddToListModal] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
@@ -359,21 +459,21 @@ export default function DashboardPage() {
   const [stateOptions, setStateOptions] = useState<string[]>([]);
   const [creatorTypeOptions, setCreatorTypeOptions] = useState<string[]>([]);
 
-  const [filters, setFilters] = useState({ ...DEFAULT_FILTERS });
+  const [filters, setFilters] = useState<typeof DEFAULT_FILTERS>(() => {
+    if (typeof window !== "undefined") {
+      const s = loadDashboardState();
+      return s?.filters ?? { ...DEFAULT_FILTERS };
+    }
+    return { ...DEFAULT_FILTERS };
+  });
 
-  // Lexicons ref — always up-to-date, used by NLP parser without being a dep
   const lexiconsRef = useRef<Lexicons>(EMPTY_LEXICONS);
   useEffect(() => {
     lexiconsRef.current = { niches: nicheOptions, countries: countryOptions, cities: cityOptions, states: stateOptions, creatorTypes: creatorTypeOptions };
   }, [nicheOptions, countryOptions, cityOptions, stateOptions, creatorTypeOptions]);
 
-  // Search cache: cacheKey -> results. Instant re-render on revisited searches.
   const searchCache = useRef<Map<string, { creators: Creator[]; pagination: Pagination | null }>>(new Map());
-
-  // Request counter: cancel stale in-flight fetches (the core fix for the
-  // "filters reset after 1-2 secs" bug — stale responses no longer overwrite)
   const requestId = useRef(0);
-
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(msg: string, type: Toast["type"] = "success") {
@@ -404,7 +504,11 @@ export default function DashboardPage() {
       });
   }, []);
 
-  // ── Core fetch function ──────────────────────────────────────────────────────
+  // Save state to sessionStorage whenever it changes
+  useEffect(() => {
+    saveDashboardState({ rawQuery, filters, page });
+  }, [rawQuery, filters, page]);
+
   const fetchCreators = useCallback(async (
     q: string,
     p: number,
@@ -431,13 +535,11 @@ export default function DashboardPage() {
     const cacheKey = params.toString();
     const myReqId = opts?.reqId ?? requestId.current;
 
-    // Instant cache hit: show old data immediately, revalidate in background
     const cached = searchCache.current.get(cacheKey);
     if (cached && !opts?.background) {
       setCreators(cached.creators);
       setPagination(cached.pagination);
       setLoading(false);
-      // Background revalidate — but only if this request is still current
       fetchCreators(q, p, f, { background: true, reqId: myReqId });
       return;
     }
@@ -445,16 +547,12 @@ export default function DashboardPage() {
     if (!opts?.background) setLoading(true);
     try {
       const res = await fetch(`/api/creators?${params}`);
-
-      // Discard if a newer request has since been issued
       if (myReqId !== requestId.current) return;
-
       if (res.status === 401) { router.push("/login"); return; }
       if (!res.ok) { if (!opts?.background) showToast("Failed to load creators", "error"); return; }
       const data = await res.json();
       const result = { creators: data.creators || [], pagination: data.pagination || null };
 
-      // Update cache (LRU-style cap at 40 entries)
       searchCache.current.delete(cacheKey);
       searchCache.current.set(cacheKey, result);
       if (searchCache.current.size > 40) {
@@ -462,7 +560,6 @@ export default function DashboardPage() {
         if (oldest !== undefined) searchCache.current.delete(oldest);
       }
 
-      // Only update UI if this response is still for the current request
       if (myReqId !== requestId.current) return;
       setCreators(result.creators);
       setPagination(result.pagination);
@@ -471,28 +568,14 @@ export default function DashboardPage() {
     }
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── SINGLE unified search effect (rawQuery + filters) ────────────────────────
-  // Previously there were TWO effects (one for rawQuery, one for filters) both
-  // calling fetchCreators. The rawQuery effect also called setFilters(), which
-  // triggered the filters effect, causing a second stale fetch to overwrite the
-  // filtered results after ~200ms — exactly the "filters reset" bug.
-  //
-  // Fix: one effect, one request counter increment per trigger, AbortController
-  // via reqId so stale responses never update the UI.
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
 
     searchTimer.current = setTimeout(() => {
       const { cleanQuery: cq, extractedFilters } = parseNaturalQuery(rawQuery, lexiconsRef.current);
       cleanQueryRef.current = cq;
-
-      // Merge NLP extractions into current manual filters for the API call.
-      // We do NOT call setFilters here — that would re-trigger this effect.
       const mergedFilters = { ...filters, ...extractedFilters };
-
-      // Increment request counter so any in-flight stale fetch knows to bail
       const myReqId = ++requestId.current;
-
       setPage(1);
       fetchCreators(cq, 1, mergedFilters, { reqId: myReqId });
     }, 300);
@@ -501,9 +584,8 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawQuery, filters]);
 
-  // ── Page change effect (no debounce — page clicks are intentional) ───────────
   useEffect(() => {
-    if (page === 1) return; // page resets to 1 above; avoid double-fetch on filter change
+    if (page === 1) return;
     const myReqId = ++requestId.current;
     fetchCreators(cleanQueryRef.current, page, filters, { reqId: myReqId });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -525,11 +607,36 @@ export default function DashboardPage() {
     else showToast("Failed to create list", "error");
   }
 
-  async function addToList(listId: string, creatorId: string) {
-    const res = await fetch(`/api/lists/${listId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ creatorId }) });
-    if (res.ok) { showToast("Creator added to list"); setAddToListCreator(null); refreshLists(); }
-    else if (res.status === 409) { showToast("Already in this list", "info"); setAddToListCreator(null); }
-    else showToast("Failed to add to list", "error");
+  // Add multiple selected creators to a list
+  async function addSelectedToList(listId: string) {
+    const ids = Array.from(selectedCreators);
+    let added = 0, skipped = 0, failed = 0;
+    await Promise.all(ids.map(async creatorId => {
+      const res = await fetch(`/api/lists/${listId}/items`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ creatorId }),
+      });
+      if (res.ok) added++;
+      else if (res.status === 409) skipped++;
+      else failed++;
+    }));
+    refreshLists();
+    setShowAddToListModal(false);
+    setSelectedCreators(new Set());
+    const parts = [];
+    if (added > 0) parts.push(`${added} added`);
+    if (skipped > 0) parts.push(`${skipped} already in list`);
+    if (failed > 0) parts.push(`${failed} failed`);
+    showToast(parts.join(", "), failed > 0 ? "error" : "success");
+  }
+
+  async function createListAndAddSelected() {
+    if (!newListName.trim()) return;
+    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newListName.trim() }) });
+    if (!res.ok) { showToast("Failed to create list", "error"); return; }
+    const data = await res.json();
+    setNewListName("");
+    refreshLists();
+    await addSelectedToList(data.list.id);
   }
 
   function handleDeleteList(id: string, name: string) {
@@ -555,15 +662,61 @@ export default function DashboardPage() {
     setFilters(prev => ({ ...prev, [key]: "" }));
   }
 
+  // Toggle creator selection
+  function toggleCreator(id: string) {
+    setSelectedCreators(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const allIds = creators.map(c => c.username || c.pk);
+    if (allIds.every(id => selectedCreators.has(id))) {
+      setSelectedCreators(new Set());
+    } else {
+      setSelectedCreators(new Set(allIds));
+    }
+  }
+
+  // Navigate to creator detail, preserving dashboard state
+  function viewCreator(username: string) {
+    router.push(`/dashboard/creators/${username}`);
+  }
+
+  // Navigate to list, keeping sidebar state in sessionStorage
+  function openList(listId: string) {
+    // Save sidebar open state
+    try { sessionStorage.setItem("lists_sidebar_open", "true"); } catch {}
+    router.push(`/dashboard/lists?id=${listId}`);
+  }
+
+  // Restore sidebar open state on mount
+  useEffect(() => {
+    try {
+      const open = sessionStorage.getItem("lists_sidebar_open");
+      if (open === "true") {
+        setShowListsSidebar(true);
+        sessionStorage.removeItem("lists_sidebar_open");
+      }
+    } catch {}
+  }, []);
+
   const activeFiltersCount = Object.entries(filters).filter(([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== "").length;
   const inputStyle = { background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" };
   const selectStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
+  const allSelected = creators.length > 0 && creators.every(c => selectedCreators.has(c.username || c.pk));
+  const someSelected = selectedCreators.size > 0;
 
   return (
     <>
       <style>{`
         @keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         select option { background: #1f2937; color: #f9fafb; }
+        * { -webkit-user-select: none; user-select: none; }
+        input, textarea { -webkit-user-select: text; user-select: text; }
       `}</style>
 
       <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
@@ -578,17 +731,64 @@ export default function DashboardPage() {
               <span className="font-semibold text-sm">CreatorDiscover</span>
             </div>
           </div>
-          <nav className="flex-1 p-3 space-y-1">
+          <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
             <a href="/dashboard" className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
               Search
             </a>
-            <button onClick={() => setShowListsSidebar(!showListsSidebar)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm"
-              style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-              Saved Lists
-              {savedLists.length > 0 && <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{savedLists.length}</span>}
-            </button>
+
+            {/* Saved Lists section in sidebar */}
+            <div>
+              <button
+                onClick={() => setShowListsSidebar(!showListsSidebar)}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium"
+                style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                Saved Lists
+                {savedLists.length > 0 && (
+                  <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{savedLists.length}</span>
+                )}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-3 h-3 transition-transform ${showListsSidebar ? "rotate-180" : ""}`}><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+
+              {/* Inline list items in sidebar */}
+              {showListsSidebar && (
+                <div className="mt-1 ml-3 space-y-0.5">
+                  {savedLists.length === 0 ? (
+                    <p className="text-xs px-3 py-2" style={{ color: "var(--text-secondary)" }}>No lists yet</p>
+                  ) : (
+                    savedLists.map(list => (
+                      <button
+                        key={list.id}
+                        onClick={() => openList(list.id)}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-all"
+                        style={{ color: "var(--text-secondary)", background: "transparent" }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 flex-shrink-0" style={{ color: "var(--accent)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                        <span className="flex-1 truncate">{list.name}</span>
+                        <span className="text-xs px-1 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", minWidth: "1.5rem", textAlign: "center" }}>{list._count.items}</span>
+                      </button>
+                    ))
+                  )}
+                  {/* Quick create list in sidebar */}
+                  <div className="flex gap-1.5 px-1 pt-2 pb-1">
+                    <input
+                      value={newListName}
+                      onChange={e => setNewListName(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && createList()}
+                      placeholder="New list…"
+                      className="flex-1 px-2 py-1 rounded text-xs outline-none"
+                      style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                    />
+                    <button onClick={createList} disabled={!newListName.trim()} className="px-2 py-1 rounded text-xs font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>+</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {user?.role === "ADMIN" && (
               <a href="/admin" className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ color: "var(--text-secondary)" }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -609,42 +809,6 @@ export default function DashboardPage() {
             </button>
           </div>
         </aside>
-
-        {/* ── Lists panel ── */}
-        {showListsSidebar && (
-          <div className="w-72 flex-shrink-0 flex flex-col border-r overflow-y-auto" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-            <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
-              <h2 className="font-semibold text-sm">Saved Lists</h2>
-              <button onClick={() => setShowListsSidebar(false)} className="w-7 h-7 rounded-lg flex items-center justify-center text-sm" style={{ color: "var(--text-secondary)", background: "var(--surface-2)" }}>✕</button>
-            </div>
-            <div className="p-3 space-y-1 flex-1">
-              {savedLists.length === 0 && (
-                <div className="text-center py-8">
-                  <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No lists yet</p>
-                  <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>Create one below to get started</p>
-                </div>
-              )}
-              {savedLists.map(list => (
-                <div key={list.id} className="flex items-center gap-2 px-3 py-2.5 rounded-lg group cursor-pointer" style={{ background: "var(--surface-2)" }}
-                  onClick={() => router.push(`/dashboard/lists?id=${list.id}`)}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "var(--accent)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-                  <span className="text-sm flex-1 truncate">{list.name}</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface)", color: "var(--text-secondary)" }}>{list._count.items}</span>
-                  <button onClick={e => { e.stopPropagation(); handleDeleteList(list.id, list.name); }}
-                    className="ml-4 pl-4 opacity-0 group-hover:opacity-100 px-2 py-1 rounded text-xs font-medium transition-opacity"
-                    style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>Delete</button>
-                </div>
-              ))}
-            </div>
-            <div className="p-3 border-t" style={{ borderColor: "var(--border)" }}>
-              <div className="flex gap-2">
-                <input value={newListName} onChange={e => setNewListName(e.target.value)} onKeyDown={e => e.key === "Enter" && createList()}
-                  placeholder="New list name…" className="flex-1 px-3 py-1.5 rounded-lg text-sm outline-none" style={inputStyle} />
-                <button onClick={createList} disabled={!newListName.trim()} className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>Create</button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* ── Main content ── */}
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -674,7 +838,6 @@ export default function DashboardPage() {
             {/* Filter panel */}
             {showFilters && (
               <div className="mt-4 p-4 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Niche</label>
                   <select value={filters.niche} onChange={e => setFilters(p => ({ ...p, niche: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -682,7 +845,6 @@ export default function DashboardPage() {
                     {nicheOptions.map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Country</label>
                   <select value={filters.country} onChange={e => setFilters(p => ({ ...p, country: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -690,7 +852,6 @@ export default function DashboardPage() {
                     {countryOptions.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>State</label>
                   <select value={filters.state} onChange={e => setFilters(p => ({ ...p, state: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -698,7 +859,6 @@ export default function DashboardPage() {
                     {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>City</label>
                   <select value={filters.city} onChange={e => setFilters(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -706,7 +866,6 @@ export default function DashboardPage() {
                     {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Type</label>
                   <select value={filters.creatorType} onChange={e => setFilters(p => ({ ...p, creatorType: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -714,21 +873,18 @@ export default function DashboardPage() {
                     {creatorTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Gender</label>
                   <select value={filters.gender} onChange={e => setFilters(p => ({ ...p, gender: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                     <option value="">Any</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option>
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Age Group</label>
                   <select value={filters.ageGroup} onChange={e => setFilters(p => ({ ...p, ageGroup: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                     <option value="">Any</option><option value="18-24">18–24</option><option value="25-34">25–34</option><option value="35-44">35–44</option><option value="45+">45+</option>
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Size</label>
                   <select value={filters.creatorSize} onChange={e => setFilters(p => ({ ...p, creatorSize: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -736,24 +892,20 @@ export default function DashboardPage() {
                     {CREATOR_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Collab Status</label>
                   <select value={filters.collabStatus} onChange={e => setFilters(p => ({ ...p, collabStatus: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                     <option value="">Any</option><option value="open">Open</option><option value="closed">Closed</option>
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Min Followers</label>
                   <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))} placeholder="10000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Max Followers</label>
                   <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))} placeholder="500000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
                 </div>
-
                 {[{ label: "Has Email", key: "hasEmail" }, { label: "Has TikTok", key: "hasTiktok" }, { label: "Has YouTube", key: "hasYoutube" }].map(f => (
                   <div key={f.key}>
                     <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{f.label}</label>
@@ -762,7 +914,6 @@ export default function DashboardPage() {
                     </select>
                   </div>
                 ))}
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Sort By</label>
                   <select value={filters.sortBy} onChange={e => setFilters(p => ({ ...p, sortBy: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
@@ -770,14 +921,12 @@ export default function DashboardPage() {
                     <option value="lastUpdated">Last Updated</option>
                   </select>
                 </div>
-
                 <div>
                   <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Order</label>
                   <select value={filters.sortOrder} onChange={e => setFilters(p => ({ ...p, sortOrder: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
                     <option value="desc">Descending</option><option value="asc">Ascending</option>
                   </select>
                 </div>
-
                 <div className="col-span-full flex justify-end">
                   <button onClick={clearAllFilters} className="px-4 py-1.5 rounded-lg text-sm" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Clear all filters</button>
                 </div>
@@ -788,9 +937,39 @@ export default function DashboardPage() {
           {/* Active filter pills */}
           <ActiveFilterPills filters={filters} onRemove={removeFilter} />
 
-          {/* Results count */}
+          {/* Results count + multi-select toolbar */}
           <div className="px-6 py-2.5 flex items-center gap-3 text-sm" style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
             {pagination && (loading ? "Searching…" : `${pagination.total.toLocaleString()} creators found`)}
+
+            {creators.length > 0 && (
+              <div className="ml-auto flex items-center gap-2">
+                {someSelected && (
+                  <button
+                    onClick={() => setShowAddToListModal(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ background: "var(--accent)", color: "white" }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                    Add {selectedCreators.size} to list
+                  </button>
+                )}
+                {someSelected && (
+                  <button onClick={() => setSelectedCreators(new Set())} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
+                    Clear selection
+                  </button>
+                )}
+                <button
+                  onClick={toggleSelectAll}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+                  style={{ background: allSelected ? "rgba(99,102,241,0.15)" : "var(--surface-2)", color: allSelected ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${allSelected ? "var(--accent)" : "var(--border)"}` }}
+                >
+                  <div className="w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0" style={{ borderColor: allSelected ? "var(--accent)" : "var(--text-secondary)", background: allSelected ? "var(--accent)" : "transparent" }}>
+                    {allSelected && <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" className="w-2.5 h-2.5"><polyline points="20 6 9 17 4 12"/></svg>}
+                  </div>
+                  {allSelected ? "Deselect all" : "Select all"}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Creator cards */}
@@ -824,57 +1003,94 @@ export default function DashboardPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {creators.map(c => (
-                  <div key={c.username || c.pk} className="rounded-xl p-4 flex flex-col gap-3 group" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                    <div className="flex items-start gap-3">
-                      {c.profilePicture ? (
-                        <img src={c.profilePicture} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                      ) : (
-                        <div className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center font-medium text-sm" style={{ background: "var(--accent)", color: "white" }}>
-                          {(c.username || c.firstName || "?").charAt(0).toUpperCase()}
+                {creators.map(c => {
+                  const creatorId = c.username || c.pk;
+                  const isSelected = selectedCreators.has(creatorId);
+                  return (
+                    <div
+                      key={creatorId}
+                      className="rounded-xl p-4 flex flex-col gap-3 group relative"
+                      style={{
+                        background: "var(--surface)",
+                        border: isSelected ? "1.5px solid var(--accent)" : "1px solid var(--border)",
+                        boxShadow: isSelected ? "0 0 0 3px rgba(99,102,241,0.12)" : "none",
+                      }}
+                    >
+                      {/* Checkbox */}
+                      <button
+                        onClick={() => toggleCreator(creatorId)}
+                        className="absolute top-3 right-3 w-5 h-5 rounded border-2 flex items-center justify-center transition-all"
+                        style={{
+                          borderColor: isSelected ? "var(--accent)" : "var(--border)",
+                          background: isSelected ? "var(--accent)" : "transparent",
+                          opacity: isSelected ? 1 : undefined,
+                        }}
+                      >
+                        {isSelected && <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" className="w-3 h-3"><polyline points="20 6 9 17 4 12"/></svg>}
+                      </button>
+
+                      <div className="flex items-start gap-3 pr-7">
+                        {c.profilePicture ? (
+                          <img src={c.profilePicture} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                        ) : (
+                          <div className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center font-medium text-sm" style={{ background: "var(--accent)", color: "white" }}>
+                            {(c.username || c.firstName || "?").charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm truncate">{c.username || "—"}</p>
+                          <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{displayName(c)}</p>
                         </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {c.nichePrimary && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>{c.nichePrimary}</span>}
+                        {c.creatorSize && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(0,0,0,0.2)", color: sizeColor[c.creatorSize] || "var(--text-secondary)" }}>{c.creatorSize}</span>}
+                        {c.addressCountry && <span className="px-2 py-0.5 rounded-full text-xs" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{c.addressCity ? `${c.addressCity}, ` : ""}{c.addressCountry}</span>}
+                      </div>
+
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="font-semibold">{fmtNum(c.followerCount)}</span>
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>followers</span>
+                        {c.gender && <span className="text-xs ml-auto capitalize" style={{ color: "var(--text-secondary)" }}>{c.gender}</span>}
+                      </div>
+
+                      {c.totalCollaborationsInRecent25 !== null && c.totalCollaborationsInRecent25 !== undefined && (
+                        <div className="text-xs" style={{ color: "var(--text-secondary)" }}>🤝 {c.totalCollaborationsInRecent25} collabs in last 25 posts</div>
                       )}
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate">{c.username || "—"}</p>
-                        <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{displayName(c)}</p>
+
+                      <div className="flex gap-1.5">
+                        {c.primarySocialLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>IG</span>}
+                        {c.tiktokLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>TT</span>}
+                        {c.youtubeLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>YT</span>}
+                        {c.email && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>✉</span>}
+                        {c.collaborationStatus && (
+                          <span className="text-xs px-1.5 py-0.5 rounded ml-auto capitalize" style={{
+                            background: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "rgba(34,197,94,0.15)" : "var(--surface-2)",
+                            color: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "#22c55e" : "var(--text-secondary)",
+                          }}>{c.collaborationStatus}</span>
+                        )}
+                      </div>
+
+                      <div className="flex gap-2 pt-1 border-t" style={{ borderColor: "var(--border)" }}>
+                        <button
+                          onClick={() => c.username && viewCreator(c.username)}
+                          className="flex-1 py-1.5 rounded-lg text-xs font-medium text-center"
+                          style={{ background: "var(--surface-2)", color: "var(--text-primary)" }}
+                        >
+                          View details
+                        </button>
+                        <button
+                          onClick={() => { setSelectedCreators(new Set([creatorId])); setShowAddToListModal(true); }}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                          style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}
+                        >
+                          + List
+                        </button>
                       </div>
                     </div>
-
-                    <div className="flex flex-wrap gap-1.5">
-                      {c.nichePrimary && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>{c.nichePrimary}</span>}
-                      {c.creatorSize && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(0,0,0,0.2)", color: sizeColor[c.creatorSize] || "var(--text-secondary)" }}>{c.creatorSize}</span>}
-                      {c.addressCountry && <span className="px-2 py-0.5 rounded-full text-xs" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{c.addressCity ? `${c.addressCity}, ` : ""}{c.addressCountry}</span>}
-                    </div>
-
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="font-semibold">{fmtNum(c.followerCount)}</span>
-                      <span className="text-xs" style={{ color: "var(--text-secondary)" }}>followers</span>
-                      {c.gender && <span className="text-xs ml-auto capitalize" style={{ color: "var(--text-secondary)" }}>{c.gender}</span>}
-                    </div>
-
-                    {c.totalCollaborationsInRecent25 !== null && c.totalCollaborationsInRecent25 !== undefined && (
-                      <div className="text-xs" style={{ color: "var(--text-secondary)" }}>🤝 {c.totalCollaborationsInRecent25} collabs in last 25 posts</div>
-                    )}
-
-                    <div className="flex gap-1.5">
-                      {c.primarySocialLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>IG</span>}
-                      {c.tiktokLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>TT</span>}
-                      {c.youtubeLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>YT</span>}
-                      {c.email && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>✉</span>}
-                      {c.collaborationStatus && (
-                        <span className="text-xs px-1.5 py-0.5 rounded ml-auto capitalize" style={{
-                          background: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "rgba(34,197,94,0.15)" : "var(--surface-2)",
-                          color: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "#22c55e" : "var(--text-secondary)",
-                        }}>{c.collaborationStatus}</span>
-                      )}
-                    </div>
-
-                    <div className="flex gap-2 pt-1 border-t" style={{ borderColor: "var(--border)" }}>
-                      <button onClick={() => c.username && router.push(`/dashboard/creators/${c.username}`)} className="flex-1 py-1.5 rounded-lg text-xs font-medium text-center" style={{ background: "var(--surface-2)", color: "var(--text-primary)" }}>View details</button>
-                      <button onClick={() => setAddToListCreator(c.username)} className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>+ List</button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -888,36 +1104,17 @@ export default function DashboardPage() {
           </div>
         </main>
 
-        {/* Add to list modal */}
-        {addToListCreator && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setAddToListCreator(null)}>
-            <div className="rounded-2xl p-6 w-80 shadow-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold">Add to list</h3>
-                <button onClick={() => setAddToListCreator(null)} style={{ color: "var(--text-secondary)" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-              </div>
-              <p className="text-xs mb-3" style={{ color: "var(--text-secondary)" }}>Adding: <span style={{ color: "var(--text-primary)" }}>@{addToListCreator}</span></p>
-              {savedLists.length === 0 ? (
-                <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>No lists yet. Create one below.</p>
-              ) : (
-                <div className="space-y-2 mb-4 max-h-48 overflow-y-auto">
-                  {savedLists.map(list => (
-                    <button key={list.id} onClick={() => addToList(list.id, addToListCreator!)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left" style={{ background: "var(--surface-2)", color: "var(--text-primary)" }}>
-                      <span className="flex-1 truncate">{list.name}</span>
-                      <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{list._count.items}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <input value={newListName} onChange={e => setNewListName(e.target.value)} onKeyDown={e => e.key === "Enter" && createList()}
-                  placeholder="Or create new list…" className="flex-1 px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} />
-                <button onClick={createList} className="px-3 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>Create</button>
-              </div>
-            </div>
-          </div>
+        {/* Multi-select Add to List Modal */}
+        {showAddToListModal && (
+          <AddToListModal
+            selectedCreators={Array.from(selectedCreators)}
+            savedLists={savedLists}
+            onClose={() => setShowAddToListModal(false)}
+            onAddToList={addSelectedToList}
+            onCreateList={createListAndAddSelected}
+            newListName={newListName}
+            setNewListName={setNewListName}
+          />
         )}
       </div>
 
