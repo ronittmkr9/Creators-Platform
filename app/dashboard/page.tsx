@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { cachedFetch, invalidateCache } from "@/lib/client-cache";
 
 interface Creator {
   pk: string;
@@ -298,6 +299,7 @@ function AddToListModal({
   onCreateList,
   newListName,
   setNewListName,
+  addingToList,
 }: {
   selectedCreators: string[];
   savedLists: SavedList[];
@@ -306,64 +308,76 @@ function AddToListModal({
   onCreateList: () => void;
   newListName: string;
   setNewListName: (v: string) => void;
+  addingToList: boolean;
 }) {
   const count = selectedCreators.length;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }} onClick={!addingToList ? onClose : undefined}>
       <div className="rounded-2xl p-6 w-80 shadow-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
           <h3 className="font-semibold">Add to list</h3>
-          <button onClick={onClose} style={{ color: "var(--text-secondary)" }}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          {!addingToList && (
+            <button onClick={onClose} style={{ color: "var(--text-secondary)" }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          )}
         </div>
         <p className="text-xs mb-4" style={{ color: "var(--text-secondary)" }}>
           Adding <span style={{ color: "var(--accent)", fontWeight: 600 }}>{count} creator{count !== 1 ? "s" : ""}</span> to a list
         </p>
 
-        {/* List headers */}
-        {savedLists.length > 0 && (
-          <div className="flex items-center justify-between px-3 mb-1">
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>List Name</span>
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>Creators</span>
+        {addingToList ? (
+          <div className="flex flex-col items-center justify-center py-8 gap-3">
+            <svg className="w-6 h-6 animate-spin" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" /></svg>
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Adding creators…</p>
           </div>
-        )}
-
-        {savedLists.length === 0 ? (
-          <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>No lists yet. Create one below.</p>
         ) : (
-          <div className="space-y-1.5 mb-4 max-h-52 overflow-y-auto">
-            {savedLists.map(list => (
-              <button
-                key={list.id}
-                onClick={() => onAddToList(list.id)}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all"
-                style={{ background: "var(--surface-2)", color: "var(--text-primary)", border: "1px solid transparent" }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--accent)"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(99,102,241,0.1)"; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "transparent"; (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; }}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "var(--accent)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-                <span className="flex-1 truncate font-medium">{list.name}</span>
-                <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface)", color: "var(--text-secondary)" }}>{list._count.items}</span>
-              </button>
-            ))}
-          </div>
-        )}
+          <>
+            {/* List headers */}
+            {savedLists.length > 0 && (
+              <div className="flex items-center justify-between px-3 mb-1">
+                <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>List Name</span>
+                <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>Creators</span>
+              </div>
+            )}
 
-        <div className="pt-3 border-t" style={{ borderColor: "var(--border)" }}>
-          <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Create new list</p>
-          <div className="flex gap-2">
-            <input
-              value={newListName}
-              onChange={e => setNewListName(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && onCreateList()}
-              placeholder="List name…"
-              className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-              style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-            />
-            <button onClick={onCreateList} disabled={!newListName.trim()} className="px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>Create</button>
-          </div>
-        </div>
+            {savedLists.length === 0 ? (
+              <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>No lists yet. Create one below.</p>
+            ) : (
+              <div className="space-y-1.5 mb-4 max-h-52 overflow-y-auto">
+                {savedLists.map(list => (
+                  <button
+                    key={list.id}
+                    onClick={() => onAddToList(list.id)}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all"
+                    style={{ background: "var(--surface-2)", color: "var(--text-primary)", border: "1px solid transparent" }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--accent)"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(99,102,241,0.1)"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "transparent"; (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 flex-shrink-0" style={{ color: "var(--accent)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                    <span className="flex-1 truncate font-medium">{list.name}</span>
+                    <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface)", color: "var(--text-secondary)" }}>{list._count.items}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-3 border-t" style={{ borderColor: "var(--border)" }}>
+              <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Create new list</p>
+              <div className="flex gap-2">
+                <input
+                  value={newListName}
+                  onChange={e => setNewListName(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && onCreateList()}
+                  placeholder="List name…"
+                  className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                  style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                />
+                <button onClick={onCreateList} disabled={!newListName.trim()} className="px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>Create</button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -417,7 +431,6 @@ export default function DashboardPage() {
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Restore state from sessionStorage on mount
   const restoredState = useRef<ReturnType<typeof loadDashboardState>>(null);
   if (restoredState.current === undefined as unknown as null) {
     restoredState.current = null;
@@ -445,9 +458,10 @@ export default function DashboardPage() {
   const [showListsSidebar, setShowListsSidebar] = useState(false);
   const [savedLists, setSavedLists] = useState<SavedList[]>([]);
 
-  // Multi-select state: set of creator usernames/pks selected
   const [selectedCreators, setSelectedCreators] = useState<Set<string>>(new Set());
   const [showAddToListModal, setShowAddToListModal] = useState(false);
+  // FIX: loading state for add-to-list operation
+  const [addingToList, setAddingToList] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
@@ -475,6 +489,9 @@ export default function DashboardPage() {
   const searchCache = useRef<Map<string, { creators: Creator[]; pagination: Pagination | null }>>(new Map());
   const requestId = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // FIX: ref to signal that the search/filter effect already triggered a page-1 fetch
+  // so the page effect should skip (avoids double-fetch), but manual page changes still work
+  const skipNextPageEffectRef = useRef(false);
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -485,26 +502,25 @@ export default function DashboardPage() {
   function confirm(dialog: ConfirmDialog) { setConfirmDialog(dialog); }
 
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then(r => { if (!r.ok) { router.push("/login"); return null; } return r.json(); })
-      .then(d => { if (d) setUser(d.user); });
+    cachedFetch("auth/me", () =>
+      fetch("/api/auth/me").then(r => { if (!r.ok) { router.push("/login"); return null; } return r.json(); })
+    ).then(d => { if (d) setUser(d.user); }).catch(() => router.push("/login"));
 
-    fetch("/api/lists")
-      .then(r => r.ok ? r.json() : { lists: [] })
-      .then(d => setSavedLists(d.lists || []));
+    cachedFetch("lists", () =>
+      fetch("/api/lists").then(r => r.ok ? r.json() : { lists: [] })
+    ).then(d => setSavedLists(d.lists || []));
 
-    fetch("/api/creators/meta")
-      .then(r => r.ok ? r.json() : {})
-      .then(d => {
-        setNicheOptions((d.primaryniches || []).filter(Boolean).sort());
-        setCountryOptions((d.countries || []).filter(Boolean).sort());
-        setCityOptions((d.cities || []).filter(Boolean).sort());
-        setStateOptions((d.states || []).filter(Boolean).sort());
-        setCreatorTypeOptions((d.creatorTypes || []).filter(Boolean).sort());
-      });
+    cachedFetch("creators/meta", () =>
+      fetch("/api/creators/meta").then(r => r.ok ? r.json() : {})
+    ).then(d => {
+      setNicheOptions((d.primaryniches || []).filter(Boolean).sort());
+      setCountryOptions((d.countries || []).filter(Boolean).sort());
+      setCityOptions((d.cities || []).filter(Boolean).sort());
+      setStateOptions((d.states || []).filter(Boolean).sort());
+      setCreatorTypeOptions((d.creatorTypes || []).filter(Boolean).sort());
+    });
   }, []);
 
-  // Save state to sessionStorage whenever it changes
   useEffect(() => {
     saveDashboardState({ rawQuery, filters, page });
   }, [rawQuery, filters, page]);
@@ -576,6 +592,8 @@ export default function DashboardPage() {
       cleanQueryRef.current = cq;
       const mergedFilters = { ...filters, ...extractedFilters };
       const myReqId = ++requestId.current;
+      // FIX: tell the page effect to skip its next run since we're handling page 1 here
+      skipNextPageEffectRef.current = true;
       setPage(1);
       fetchCreators(cq, 1, mergedFilters, { reqId: myReqId });
     }, 300);
@@ -584,8 +602,14 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawQuery, filters]);
 
+  // FIX: Removed `if (page === 1) return` — that was causing "Previous" from page 2
+  // to never re-fetch page 1. Instead we use skipNextPageEffectRef to avoid the
+  // double-fetch that the search/filter effect already handles.
   useEffect(() => {
-    if (page === 1) return;
+    if (skipNextPageEffectRef.current) {
+      skipNextPageEffectRef.current = false;
+      return;
+    }
     const myReqId = ++requestId.current;
     fetchCreators(cleanQueryRef.current, page, filters, { reqId: myReqId });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -597,19 +621,27 @@ export default function DashboardPage() {
   }
 
   function refreshLists() {
-    fetch("/api/lists").then(r => r.json()).then(d => setSavedLists(d.lists || []));
+    invalidateCache("lists");
+    cachedFetch("lists", () =>
+      fetch("/api/lists").then(r => r.json())
+    ).then(d => setSavedLists(d.lists || []));
   }
 
+  // FIX: Duplicate list name check
   async function createList() {
     if (!newListName.trim()) return;
-    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newListName.trim() }) });
+    const trimmed = newListName.trim();
+    const duplicate = savedLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
+    if (duplicate) { showToast(`A list named "${trimmed}" already exists`, "error"); return; }
+    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed }) });
     if (res.ok) { setNewListName(""); refreshLists(); showToast("List created"); }
     else showToast("Failed to create list", "error");
   }
 
-  // Add multiple selected creators to a list
+  // FIX: Loading state + duplicate check for add-to-list
   async function addSelectedToList(listId: string) {
     const ids = Array.from(selectedCreators);
+    setAddingToList(true);
     let added = 0, skipped = 0, failed = 0;
     await Promise.all(ids.map(async creatorId => {
       const res = await fetch(`/api/lists/${listId}/items`, {
@@ -620,6 +652,7 @@ export default function DashboardPage() {
       else failed++;
     }));
     refreshLists();
+    setAddingToList(false);
     setShowAddToListModal(false);
     setSelectedCreators(new Set());
     const parts = [];
@@ -629,10 +662,15 @@ export default function DashboardPage() {
     showToast(parts.join(", "), failed > 0 ? "error" : "success");
   }
 
+  // FIX: Duplicate list name check + loading state for create-and-add flow
   async function createListAndAddSelected() {
     if (!newListName.trim()) return;
-    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newListName.trim() }) });
-    if (!res.ok) { showToast("Failed to create list", "error"); return; }
+    const trimmed = newListName.trim();
+    const duplicate = savedLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
+    if (duplicate) { showToast(`A list named "${trimmed}" already exists`, "error"); return; }
+    setAddingToList(true);
+    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed }) });
+    if (!res.ok) { setAddingToList(false); showToast("Failed to create list", "error"); return; }
     const data = await res.json();
     setNewListName("");
     refreshLists();
@@ -662,7 +700,6 @@ export default function DashboardPage() {
     setFilters(prev => ({ ...prev, [key]: "" }));
   }
 
-  // Toggle creator selection
   function toggleCreator(id: string) {
     setSelectedCreators(prev => {
       const next = new Set(prev);
@@ -681,19 +718,15 @@ export default function DashboardPage() {
     }
   }
 
-  // Navigate to creator detail, preserving dashboard state
   function viewCreator(username: string) {
     router.push(`/dashboard/creators/${username}`);
   }
 
-  // Navigate to list, keeping sidebar state in sessionStorage
   function openList(listId: string) {
-    // Save sidebar open state
     try { sessionStorage.setItem("lists_sidebar_open", "true"); } catch {}
     router.push(`/dashboard/lists?id=${listId}`);
   }
 
-  // Restore sidebar open state on mount
   useEffect(() => {
     try {
       const open = sessionStorage.getItem("lists_sidebar_open");
@@ -714,6 +747,8 @@ export default function DashboardPage() {
     <>
       <style>{`
         @keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 0.7s linear infinite; }
         select option { background: #1f2937; color: #f9fafb; }
         * { -webkit-user-select: none; user-select: none; }
         input, textarea { -webkit-user-select: text; user-select: text; }
@@ -728,7 +763,7 @@ export default function DashboardPage() {
               <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "var(--accent)" }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-4 h-4"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
               </div>
-              <span className="font-semibold text-sm">CreatorDiscover</span>
+              <span className="font-semibold text-sm">CreatorDiscover-Veel</span>
             </div>
           </div>
           <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
@@ -737,7 +772,6 @@ export default function DashboardPage() {
               Search
             </a>
 
-            {/* Saved Lists section in sidebar */}
             <div>
               <button
                 onClick={() => setShowListsSidebar(!showListsSidebar)}
@@ -752,7 +786,6 @@ export default function DashboardPage() {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-3 h-3 transition-transform ${showListsSidebar ? "rotate-180" : ""}`}><polyline points="6 9 12 15 18 9"/></svg>
               </button>
 
-              {/* Inline list items in sidebar */}
               {showListsSidebar && (
                 <div className="mt-1 ml-3 space-y-0.5">
                   {savedLists.length === 0 ? (
@@ -773,7 +806,6 @@ export default function DashboardPage() {
                       </button>
                     ))
                   )}
-                  {/* Quick create list in sidebar */}
                   <div className="flex gap-1.5 px-1 pt-2 pb-1">
                     <input
                       value={newListName}
@@ -939,7 +971,14 @@ export default function DashboardPage() {
 
           {/* Results count + multi-select toolbar */}
           <div className="px-6 py-2.5 flex items-center gap-3 text-sm" style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
-            {pagination && (loading ? "Searching…" : `${pagination.total.toLocaleString()} creators found`)}
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                Searching…
+              </span>
+            ) : (
+              pagination && `${pagination.total.toLocaleString()} creators found`
+            )}
 
             {creators.length > 0 && (
               <div className="ml-auto flex items-center gap-2">
@@ -1096,9 +1135,23 @@ export default function DashboardPage() {
 
             {pagination && pagination.totalPages > 1 && (
               <div className="flex items-center justify-center gap-3 mt-8 pb-4">
-                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-4 py-2 rounded-lg text-sm disabled:opacity-40" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}>← Previous</button>
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1 || loading}
+                  className="px-4 py-2 rounded-lg text-sm disabled:opacity-40"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                >
+                  ← Previous
+                </button>
                 <span className="text-sm" style={{ color: "var(--text-secondary)" }}>Page {page} of {pagination.totalPages}</span>
-                <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))} disabled={page === pagination.totalPages} className="px-4 py-2 rounded-lg text-sm disabled:opacity-40" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}>Next →</button>
+                <button
+                  onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+                  disabled={page === pagination.totalPages || loading}
+                  className="px-4 py-2 rounded-lg text-sm disabled:opacity-40"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                >
+                  Next →
+                </button>
               </div>
             )}
           </div>
@@ -1109,11 +1162,12 @@ export default function DashboardPage() {
           <AddToListModal
             selectedCreators={Array.from(selectedCreators)}
             savedLists={savedLists}
-            onClose={() => setShowAddToListModal(false)}
+            onClose={() => { if (!addingToList) setShowAddToListModal(false); }}
             onAddToList={addSelectedToList}
             onCreateList={createListAndAddSelected}
             newListName={newListName}
             setNewListName={setNewListName}
+            addingToList={addingToList}
           />
         )}
       </div>

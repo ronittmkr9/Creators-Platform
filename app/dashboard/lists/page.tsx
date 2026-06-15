@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import { cachedFetch, invalidateCache } from "@/lib/client-cache";
 
 interface Creator {
   pk: string;
@@ -95,6 +96,8 @@ function ListPageInner() {
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [deletingList, setDeletingList] = useState(false);
   const [newListName, setNewListName] = useState("");
+  // FIX: loading state for creating a new list
+  const [creatingList, setCreatingList] = useState(false);
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -106,6 +109,7 @@ function ListPageInner() {
 
   async function fetchList() {
     if (!listId) return;
+    // Individual list detail is not cached (it mutates often), but allLists is
     const res = await fetch(`/api/lists/${listId}`);
     if (res.status === 401) { router.push("/login"); return; }
     if (!res.ok) { router.push("/dashboard"); return; }
@@ -116,11 +120,10 @@ function ListPageInner() {
   }
 
   async function fetchAllLists() {
-    const res = await fetch("/api/lists");
-    if (res.ok) {
-      const data = await res.json();
-      setAllLists(data.lists || []);
-    }
+    const data = await cachedFetch("lists", () =>
+      fetch("/api/lists").then(r => r.ok ? r.json() : { lists: [] })
+    );
+    setAllLists(data.lists || []);
   }
 
   useEffect(() => {
@@ -129,7 +132,6 @@ function ListPageInner() {
   }, [listId]);
 
   function goBackToDashboard() {
-    // Signal dashboard to restore sidebar
     try { sessionStorage.setItem("lists_sidebar_open", "true"); } catch {}
     router.push("/dashboard");
   }
@@ -138,9 +140,15 @@ function ListPageInner() {
     router.push(`/dashboard/lists?id=${id}`);
   }
 
+  // FIX: Duplicate name check + loading state
   async function createList() {
-    if (!newListName.trim()) return;
-    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newListName.trim() }) });
+    if (!newListName.trim() || creatingList) return;
+    const trimmed = newListName.trim();
+    const duplicate = allLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
+    if (duplicate) { showToast(`A list named "${trimmed}" already exists`, "error"); return; }
+    setCreatingList(true);
+    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed }) });
+    setCreatingList(false);
     if (res.ok) { setNewListName(""); fetchAllLists(); showToast("List created"); }
     else showToast("Failed to create list", "error");
   }
@@ -233,7 +241,10 @@ function ListPageInner() {
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--background)" }}>
-      <span style={{ color: "var(--text-secondary)" }}>Loading…</span>
+      <span className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+        Loading…
+      </span>
     </div>
   );
 
@@ -243,11 +254,13 @@ function ListPageInner() {
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
       <style>{`
         @keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 0.7s linear infinite; }
         * { -webkit-user-select: none; user-select: none; }
         input, textarea { -webkit-user-select: text; user-select: text; }
       `}</style>
 
-      {/* Sidebar - persists from dashboard */}
+      {/* Sidebar */}
       <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
         <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
           <div className="flex items-center gap-2">
@@ -295,10 +308,21 @@ function ListPageInner() {
                   onChange={e => setNewListName(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && createList()}
                   placeholder="New list…"
-                  className="flex-1 px-2 py-1 rounded text-xs outline-none"
+                  disabled={creatingList}
+                  className="flex-1 px-2 py-1 rounded text-xs outline-none disabled:opacity-50"
                   style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
                 />
-                <button onClick={createList} disabled={!newListName.trim()} className="px-2 py-1 rounded text-xs font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>+</button>
+                <button
+                  onClick={createList}
+                  disabled={!newListName.trim() || creatingList}
+                  className="px-2 py-1 rounded text-xs font-medium disabled:opacity-40 flex items-center justify-center"
+                  style={{ background: "var(--accent)", color: "white", minWidth: "1.75rem" }}
+                >
+                  {creatingList
+                    ? <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                    : "+"
+                  }
+                </button>
               </div>
             </div>
           </div>
@@ -327,7 +351,10 @@ function ListPageInner() {
                 style={{ background: "var(--surface-2)", border: "1px solid var(--accent)", color: "var(--text-primary)", minWidth: "200px" }}
               />
               <button onClick={saveRename} disabled={savingName} className="px-3 py-1 rounded-lg text-xs font-medium disabled:opacity-50" style={{ background: "var(--accent)", color: "white" }}>
-                {savingName ? "Saving…" : "Save"}
+                {savingName
+                  ? <span className="flex items-center gap-1.5"><svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>Saving…</span>
+                  : "Save"
+                }
               </button>
               <button onClick={() => { setEditingName(false); setNewName(list.name); }} className="px-3 py-1 rounded-lg text-xs" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Cancel</button>
             </div>
@@ -349,8 +376,10 @@ function ListPageInner() {
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
               style={{ background: "var(--accent)", color: "white" }}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              {exporting ? "Exporting…" : "Export CSV"}
+              {exporting
+                ? <><svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>Exporting…</>
+                : <><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV</>
+              }
             </button>
             <button
               onClick={handleDeleteList}
@@ -358,8 +387,10 @@ function ListPageInner() {
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
               style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-              {deletingList ? "Deleting…" : "Delete list"}
+              {deletingList
+                ? <><svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>Deleting…</>
+                : <><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>Delete list</>
+              }
             </button>
           </div>
         </div>
@@ -394,7 +425,7 @@ function ListPageInner() {
                       return (
                         <tr
                           key={item.id}
-                          style={{ borderBottom: "1px solid var(--border)", background: "var(--surface)", opacity: removingId === item.id ? 0.4 : 1 }}
+                          style={{ borderBottom: "1px solid var(--border)", background: "var(--surface)", opacity: removingId === item.id ? 0.4 : 1, transition: "opacity 0.15s" }}
                           onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = "var(--surface-2)"; }}
                           onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = "var(--surface)"; }}
                         >
@@ -449,7 +480,7 @@ function ListPageInner() {
                                 className="px-2 py-1 rounded text-xs font-medium disabled:opacity-50"
                                 style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.2)" }}
                               >
-                                Remove
+                                {removingId === item.id ? "…" : "Remove"}
                               </button>
                             </div>
                           </td>
