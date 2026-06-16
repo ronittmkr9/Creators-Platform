@@ -1,4 +1,6 @@
 /**
+ * lib/client-cache.ts
+ *
  * Module-level cache that persists across Next.js client-side navigations.
  * JS module variables survive route changes — they only reset on full page refresh.
  *
