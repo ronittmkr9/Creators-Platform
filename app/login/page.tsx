@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import toast, { Toaster } from "react-hot-toast";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -56,11 +57,86 @@ export default function LoginPage() {
     };
   }, []);
 
+  // Helper function to show a single toast
+  const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'error') => {
+    // Dismiss all existing toasts first
+    toast.dismiss();
+    // Then show the new one
+    switch(type) {
+      case 'success':
+        toast.success(message, {
+          icon: '✅',
+          style: {
+            background: 'var(--surface)',
+            color: 'var(--text-primary)',
+            border: '1px solid #22c55e',
+          },
+        });
+        break;
+      case 'warning':
+        toast.error(message, {
+          icon: '⚠️',
+          style: {
+            background: 'var(--surface)',
+            color: 'var(--text-primary)',
+            border: '1px solid #f59e0b',
+          },
+        });
+        break;
+      default:
+        toast.error(message, {
+          icon: '❌',
+          style: {
+            background: 'var(--surface)',
+            color: 'var(--text-primary)',
+            border: '1px solid #ef4444',
+          },
+        });
+    }
+  };
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (lockedUntil && Date.now() < lockedUntil) return;
-
+    
+    // Clear previous errors
     setError("");
+    
+    // Validate inputs
+    try {
+      if (!email || !password) {
+        const errorMsg = "Please fill in all fields";
+        setError(errorMsg);
+        showToast(errorMsg, 'error');
+        return;
+      }
+      
+      if (!email.includes("@") || !email.includes(".")) {
+        const errorMsg = "Please enter a valid email address";
+        setError(errorMsg);
+        showToast(errorMsg, 'error');
+        return;
+      }
+      
+      if (password.length < 6) {
+        const errorMsg = "Password must be at least 6 characters";
+        setError(errorMsg);
+        showToast(errorMsg, 'error');
+        return;
+      }
+    } catch (validationError) {
+      const errorMsg = validationError instanceof Error ? validationError.message : "Validation error";
+      setError(errorMsg);
+      showToast(errorMsg, 'error');
+      return;
+    }
+
+    if (lockedUntil && Date.now() < lockedUntil) {
+      const errorMsg = `Account is locked. Please wait ${timeLeft} seconds`;
+      setError(errorMsg);
+      showToast(errorMsg, 'error');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -80,24 +156,69 @@ export default function LoginPage() {
         if (newAttempts >= 7) {
           const until = Date.now() + 5 * 60 * 1000;
           setLockedUntil(until);
-          setError("Too many failed attempts. Account locked for 5 minutes.");
+          const errorMsg = "Too many failed attempts. Account locked for 5 minutes.";
+          setError(errorMsg);
+          showToast(errorMsg, 'error');
         } else if (newAttempts >= 5) {
           const until = Date.now() + 2 * 60 * 1000;
           setLockedUntil(until);
-          setError("Too many failed attempts. Please wait 2 minutes.");
+          const errorMsg = "Too many failed attempts. Please wait 2 minutes.";
+          setError(errorMsg);
+          showToast(errorMsg, 'error');
         } else if (newAttempts >= 3) {
           const until = Date.now() + 30 * 1000;
           setLockedUntil(until);
-          setError("Too many failed attempts. Please wait 30 seconds.");
+          const errorMsg = "Too many failed attempts. Please wait 30 seconds.";
+          setError(errorMsg);
+          showToast(errorMsg, 'error');
         } else {
-          setError(data.error || "Invalid email or password");
+          const errorMsg = data.error || "Invalid email or password";
+          setError(errorMsg);
+          showToast(errorMsg, 'error');
+          
+          // Show remaining attempts warning as a single toast
+          const remainingAttempts = 3 - newAttempts;
+          if (remainingAttempts > 0) {
+            const warningMsg = `${remainingAttempts} attempt${remainingAttempts > 1 ? 's' : ''} remaining before lockout`;
+            // Small delay to ensure the error toast shows first
+            setTimeout(() => {
+              showToast(warningMsg, 'warning');
+            }, 300);
+          }
         }
       } else {
+        // Success - login successful
         setAttempts(0);
-        router.push("/dashboard");
+        setError("");
+        toast.dismiss(); // Clear any existing toasts
+        toast.success("Welcome back! Redirecting to dashboard...", {
+          icon: '🎉',
+          duration: 3000,
+          style: {
+            background: 'var(--surface)',
+            color: 'var(--text-primary)',
+            border: '1px solid #22c55e',
+          },
+        });
+        
+        // Redirect after a brief delay
+        setTimeout(() => {
+          try {
+            router.push("/dashboard");
+          } catch (navigationError) {
+            console.error("Navigation error:", navigationError);
+            const errorMsg = "Error redirecting to dashboard";
+            setError(errorMsg);
+            showToast(errorMsg, 'error');
+          }
+        }, 1000);
       }
-    } catch {
-      setError("Network error. Please try again.");
+    } catch (fetchError) {
+      // Handle network errors
+      console.error("Login fetch error:", fetchError);
+      const errorMsg = "Network error. Please check your connection and try again.";
+      setError(errorMsg);
+      showToast(errorMsg, 'error');
     } finally {
       setLoading(false);
     }
@@ -111,6 +232,32 @@ export default function LoginPage() {
       style={{ background: "var(--background)" }}
       onContextMenu={e => e.preventDefault()}
     >
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            background: "var(--surface)",
+            color: "var(--text-primary)",
+            border: "1px solid var(--border)",
+          },
+          success: {
+            duration: 3000,
+            iconTheme: {
+              primary: "#22c55e",
+              secondary: "white",
+            },
+          },
+          error: {
+            duration: 5000,
+            iconTheme: {
+              primary: "#ef4444",
+              secondary: "white",
+            },
+          },
+        }}
+      />
+      
       <style>{`
         * { -webkit-user-select: none; user-select: none; }
         input { -webkit-user-select: text; user-select: text; }

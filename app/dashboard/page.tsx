@@ -1,7 +1,7 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { cachedFetch, invalidateCache } from "@/lib/client-cache";
+import { cachedFetch, getCached, getCacheEntry, invalidateCache } from "@/lib/client-cache";
 
 interface Creator {
   pk: string;
@@ -72,6 +72,40 @@ interface Lexicons {
   creatorTypes: string[];
 }
 const EMPTY_LEXICONS: Lexicons = { niches: [], countries: [], cities: [], states: [], creatorTypes: [] };
+
+// TTL for creator search results — after this, a background revalidation fires
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+type CreatorResult = { creators: Creator[]; pagination: Pagination | null };
+
+/**
+ * Builds both the cachedFetch cache key and the URLSearchParams for the API call.
+ * Used by fetchCreators AND by useLayoutEffect so both always use the same key format.
+ */
+function buildCacheKey(q: string, p: number, f: typeof DEFAULT_FILTERS): { key: string; params: URLSearchParams } {
+  const params = new URLSearchParams({
+    page: String(p),
+    pageSize: "50",
+    sortBy: f.sortBy,
+    sortOrder: f.sortOrder,
+  });
+  if (q) params.set("q", q);
+  if (f.niche) params.set("niche", f.niche);
+  if (f.gender) params.set("gender", f.gender);
+  if (f.ageGroup) params.set("ageGroup", f.ageGroup);
+  if (f.country) params.set("country", f.country);
+  if (f.state) params.set("state", f.state);
+  if (f.city) params.set("city", f.city);
+  if (f.creatorSize) params.set("creatorSize", f.creatorSize);
+  if (f.creatorType) params.set("creatorType", f.creatorType);
+  if (f.collabStatus) params.set("collabStatus", f.collabStatus);
+  if (f.followersMin) params.set("followersMin", f.followersMin);
+  if (f.followersMax) params.set("followersMax", f.followersMax);
+  if (f.hasEmail) params.set("hasEmail", f.hasEmail);
+  if (f.hasTiktok) params.set("hasTiktok", f.hasTiktok);
+  if (f.hasYoutube) params.set("hasYoutube", f.hasYoutube);
+  return { key: `creators:${params.toString()}`, params };
+}
 
 function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { cleanQuery: string; extractedFilters: Partial<typeof DEFAULT_FILTERS> } {
   const extracted: Partial<typeof DEFAULT_FILTERS> = {};
@@ -290,25 +324,12 @@ function SignOutModal({ onConfirm, onClose, userName }: { onConfirm: () => void;
   );
 }
 
-// ─── Multi-select Add to List Modal ──────────────────────────────────────────
 function AddToListModal({
-  selectedCreators,
-  savedLists,
-  onClose,
-  onAddToList,
-  onCreateList,
-  newListName,
-  setNewListName,
-  addingToList,
+  selectedCreators, savedLists, onClose, onAddToList, onCreateList, newListName, setNewListName, addingToList,
 }: {
-  selectedCreators: string[];
-  savedLists: SavedList[];
-  onClose: () => void;
-  onAddToList: (listId: string) => void;
-  onCreateList: () => void;
-  newListName: string;
-  setNewListName: (v: string) => void;
-  addingToList: boolean;
+  selectedCreators: string[]; savedLists: SavedList[]; onClose: () => void;
+  onAddToList: (listId: string) => void; onCreateList: () => void;
+  newListName: string; setNewListName: (v: string) => void; addingToList: boolean;
 }) {
   const count = selectedCreators.length;
   return (
@@ -325,7 +346,6 @@ function AddToListModal({
         <p className="text-xs mb-4" style={{ color: "var(--text-secondary)" }}>
           Adding <span style={{ color: "var(--accent)", fontWeight: 600 }}>{count} creator{count !== 1 ? "s" : ""}</span> to a list
         </p>
-
         {addingToList ? (
           <div className="flex flex-col items-center justify-center py-8 gap-3">
             <svg className="w-6 h-6 animate-spin" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" /></svg>
@@ -333,22 +353,18 @@ function AddToListModal({
           </div>
         ) : (
           <>
-            {/* List headers */}
             {savedLists.length > 0 && (
               <div className="flex items-center justify-between px-3 mb-1">
                 <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>List Name</span>
                 <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>Creators</span>
               </div>
             )}
-
             {savedLists.length === 0 ? (
               <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>No lists yet. Create one below.</p>
             ) : (
               <div className="space-y-1.5 mb-4 max-h-52 overflow-y-auto">
                 {savedLists.map(list => (
-                  <button
-                    key={list.id}
-                    onClick={() => onAddToList(list.id)}
+                  <button key={list.id} onClick={() => onAddToList(list.id)}
                     className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all"
                     style={{ background: "var(--surface-2)", color: "var(--text-primary)", border: "1px solid transparent" }}
                     onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--accent)"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(99,102,241,0.1)"; }}
@@ -361,18 +377,12 @@ function AddToListModal({
                 ))}
               </div>
             )}
-
             <div className="pt-3 border-t" style={{ borderColor: "var(--border)" }}>
               <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Create new list</p>
               <div className="flex gap-2">
-                <input
-                  value={newListName}
-                  onChange={e => setNewListName(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && onCreateList()}
-                  placeholder="List name…"
-                  className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                />
+                <input value={newListName} onChange={e => setNewListName(e.target.value)} onKeyDown={e => e.key === "Enter" && onCreateList()}
+                  placeholder="List name…" className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                  style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
                 <button onClick={onCreateList} disabled={!newListName.trim()} className="px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>Create</button>
               </div>
             </div>
@@ -383,7 +393,6 @@ function AddToListModal({
   );
 }
 
-// ─── Active filter pills ──────────────────────────────────────────────────────
 const FILTER_LABELS: Record<string, string> = {
   niche: "Niche", gender: "Gender", ageGroup: "Age", country: "Country", state: "State", city: "City",
   creatorSize: "Size", creatorType: "Type", collabStatus: "Status",
@@ -409,7 +418,6 @@ function ActiveFilterPills({ filters, onRemove }: { filters: typeof DEFAULT_FILT
   );
 }
 
-// ─── State persistence key ────────────────────────────────────────────────────
 const DASHBOARD_STATE_KEY = "dashboard_state";
 
 function saveDashboardState(state: { rawQuery: string; filters: typeof DEFAULT_FILTERS; page: number }) {
@@ -427,71 +435,67 @@ function loadDashboardState(): { rawQuery: string; filters: typeof DEFAULT_FILTE
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+
+  // All state initializes to SSR-safe defaults (matching what the server renders).
+  // Real values are restored from sessionStorage + cache in useLayoutEffect below.
   const [creators, setCreators] = useState<Creator[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const restoredState = useRef<ReturnType<typeof loadDashboardState>>(null);
-  if (restoredState.current === undefined as unknown as null) {
-    restoredState.current = null;
-  }
-
-  const [rawQuery, setRawQuery] = useState(() => {
-    if (typeof window !== "undefined") {
-      const s = loadDashboardState();
-      return s?.rawQuery ?? "";
-    }
-    return "";
-  });
-
-  const cleanQueryRef = useRef("");
-
-  const [page, setPage] = useState(() => {
-    if (typeof window !== "undefined") {
-      const s = loadDashboardState();
-      return s?.page ?? 1;
-    }
-    return 1;
-  });
+  const [rawQuery, setRawQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState<typeof DEFAULT_FILTERS>({ ...DEFAULT_FILTERS });
 
   const [showFilters, setShowFilters] = useState(false);
   const [showListsSidebar, setShowListsSidebar] = useState(false);
   const [savedLists, setSavedLists] = useState<SavedList[]>([]);
-
   const [selectedCreators, setSelectedCreators] = useState<Set<string>>(new Set());
   const [showAddToListModal, setShowAddToListModal] = useState(false);
-  // FIX: loading state for add-to-list operation
   const [addingToList, setAddingToList] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [showSignOut, setShowSignOut] = useState(false);
-
   const [nicheOptions, setNicheOptions] = useState<string[]>([]);
   const [countryOptions, setCountryOptions] = useState<string[]>([]);
   const [cityOptions, setCityOptions] = useState<string[]>([]);
   const [stateOptions, setStateOptions] = useState<string[]>([]);
   const [creatorTypeOptions, setCreatorTypeOptions] = useState<string[]>([]);
 
-  const [filters, setFilters] = useState<typeof DEFAULT_FILTERS>(() => {
-    if (typeof window !== "undefined") {
-      const s = loadDashboardState();
-      return s?.filters ?? { ...DEFAULT_FILTERS };
-    }
-    return { ...DEFAULT_FILTERS };
-  });
-
+  const cleanQueryRef = useRef("");
   const lexiconsRef = useRef<Lexicons>(EMPTY_LEXICONS);
+  const requestId = useRef(0);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Starts true so the [page] effect is suppressed on initial mount.
+  // The [rawQuery, filters] effect owns the first fetch via its debounce.
+  const skipNextPageEffectRef = useRef(true);
+
+  /**
+   * Restore session state + seed creators from cache BEFORE first paint.
+   * Runs only on the client (never on server), so SSR HTML always matches
+   * the plain defaults above — no hydration mismatch.
+   */
+  useLayoutEffect(() => {
+    const s = loadDashboardState();
+    if (!s) return;
+
+    // Restore UI state from session
+    if (s.rawQuery) setRawQuery(s.rawQuery);
+    if (s.page && s.page !== 1) setPage(s.page);
+    if (s.filters) setFilters(s.filters);
+
+    // Immediately show cached creators — zero network call, zero spinner
+    const { key } = buildCacheKey(s.rawQuery ?? "", s.page ?? 1, s.filters ?? { ...DEFAULT_FILTERS });
+    const cached = getCached<CreatorResult>(key);
+    if (cached) {
+      setCreators(cached.creators);
+      setPagination(cached.pagination);
+      // loading stays false — we have data to show right away
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     lexiconsRef.current = { niches: nicheOptions, countries: countryOptions, cities: cityOptions, states: stateOptions, creatorTypes: creatorTypeOptions };
   }, [nicheOptions, countryOptions, cityOptions, stateOptions, creatorTypeOptions]);
-
-  const searchCache = useRef<Map<string, { creators: Creator[]; pagination: Pagination | null }>>(new Map());
-  const requestId = useRef(0);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // FIX: ref to signal that the search/filter effect already triggered a page-1 fetch
-  // so the page effect should skip (avoids double-fetch), but manual page changes still work
-  const skipNextPageEffectRef = useRef(false);
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -501,6 +505,7 @@ export default function DashboardPage() {
 
   function confirm(dialog: ConfirmDialog) { setConfirmDialog(dialog); }
 
+  // ── Data fetching ──────────────────────────────────────────────────────────
   useEffect(() => {
     cachedFetch("auth/me", () =>
       fetch("/api/auth/me").then(r => { if (!r.ok) { router.push("/login"); return null; } return r.json(); })
@@ -519,92 +524,104 @@ export default function DashboardPage() {
       setStateOptions((d.states || []).filter(Boolean).sort());
       setCreatorTypeOptions((d.creatorTypes || []).filter(Boolean).sort());
     });
-  }, []);
+  }, []);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     saveDashboardState({ rawQuery, filters, page });
   }, [rawQuery, filters, page]);
 
+  /**
+   * fetchCreators — the single source of truth for loading creator data.
+   *
+   * Cache behaviour:
+   *   FRESH HIT  → show instantly, zero network call
+   *   STALE HIT  → show instantly, revalidate silently in background
+   *   MISS       → show spinner, fetch, store in client-cache store
+   *
+   * The key is `creators:<URLSearchParams>` — identical to the URL query string,
+   * so every unique filter/page combination has its own cache entry.
+   */
   const fetchCreators = useCallback(async (
     q: string,
     p: number,
     f: typeof DEFAULT_FILTERS,
-    opts?: { background?: boolean; reqId?: number }
+    opts?: { reqId?: number }
   ) => {
-    const params = new URLSearchParams({ page: String(p), pageSize: "50", sortBy: f.sortBy, sortOrder: f.sortOrder });
-    if (q) params.set("q", q);
-    if (f.niche) params.set("niche", f.niche);
-    if (f.gender) params.set("gender", f.gender);
-    if (f.ageGroup) params.set("ageGroup", f.ageGroup);
-    if (f.country) params.set("country", f.country);
-    if (f.state) params.set("state", f.state);
-    if (f.city) params.set("city", f.city);
-    if (f.creatorSize) params.set("creatorSize", f.creatorSize);
-    if (f.creatorType) params.set("creatorType", f.creatorType);
-    if (f.collabStatus) params.set("collabStatus", f.collabStatus);
-    if (f.followersMin) params.set("followersMin", f.followersMin);
-    if (f.followersMax) params.set("followersMax", f.followersMax);
-    if (f.hasEmail) params.set("hasEmail", f.hasEmail);
-    if (f.hasTiktok) params.set("hasTiktok", f.hasTiktok);
-    if (f.hasYoutube) params.set("hasYoutube", f.hasYoutube);
-
-    const cacheKey = params.toString();
+    const { key, params } = buildCacheKey(q, p, f);
     const myReqId = opts?.reqId ?? requestId.current;
 
-    const cached = searchCache.current.get(cacheKey);
-    if (cached && !opts?.background) {
-      setCreators(cached.creators);
-      setPagination(cached.pagination);
+    // Single fetcher definition reused for both foreground and background paths
+    const fetcher = (): Promise<CreatorResult> => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort("timeout"), 30_000);
+      return fetch(`/api/creators?${params}`, { signal: controller.signal })
+        .then(async (res) => {
+          clearTimeout(timeoutId);
+          if (res.status === 401) { router.push("/login"); throw new Error("401"); }
+          if (!res.ok) throw new Error("fetch failed");
+          const json = await res.json();
+          return { creators: json.creators || [], pagination: json.pagination || null };
+        })
+        .catch((err) => { clearTimeout(timeoutId); throw err; });
+    };
+
+    // Check the store directly so we can inspect both the data AND the age
+    // without triggering a redundant cachedFetch call.
+    const entry = getCacheEntry<CreatorResult>(key);
+    if (entry) {
+      // Always show cached data immediately — no spinner regardless of staleness
+      setCreators(entry.data.creators);
+      setPagination(entry.data.pagination);
       setLoading(false);
-      fetchCreators(q, p, f, { background: true, reqId: myReqId });
+
+      // Only hit the network if data is actually stale
+      const isStale = Date.now() - entry.fetchedAt >= SEARCH_CACHE_TTL_MS;
+      if (isStale) {
+        cachedFetch<CreatorResult>(key, fetcher, SEARCH_CACHE_TTL_MS)
+          .then((fresh) => {
+            if (myReqId !== requestId.current) return;
+            setCreators(fresh.creators);
+            setPagination(fresh.pagination);
+          })
+          .catch(() => { /* silent — user already sees valid cached data */ });
+      }
       return;
     }
 
-    if (!opts?.background) setLoading(true);
+    // Cache miss — genuine first load, show spinner
+    setLoading(true);
     try {
-      const res = await fetch(`/api/creators?${params}`);
+      const data = await cachedFetch<CreatorResult>(key, fetcher, SEARCH_CACHE_TTL_MS);
       if (myReqId !== requestId.current) return;
-      if (res.status === 401) { router.push("/login"); return; }
-      if (!res.ok) { if (!opts?.background) showToast("Failed to load creators", "error"); return; }
-      const data = await res.json();
-      const result = { creators: data.creators || [], pagination: data.pagination || null };
-
-      searchCache.current.delete(cacheKey);
-      searchCache.current.set(cacheKey, result);
-      if (searchCache.current.size > 40) {
-        const oldest = searchCache.current.keys().next().value;
-        if (oldest !== undefined) searchCache.current.delete(oldest);
-      }
-
+      setCreators(data.creators);
+      setPagination(data.pagination);
+    } catch (err: unknown) {
       if (myReqId !== requestId.current) return;
-      setCreators(result.creators);
-      setPagination(result.pagination);
+      if (err instanceof Error && err.message === "401") return;
+      const isTimeout = err instanceof Error && err.name === "AbortError";
+      showToast(isTimeout ? "Request timed out — please try again" : "Failed to load creators", "error");
     } finally {
-      if (!opts?.background && myReqId === requestId.current) setLoading(false);
+      if (myReqId === requestId.current) setLoading(false);
     }
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fires on rawQuery or filters change — debounced 300ms
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
-
     searchTimer.current = setTimeout(() => {
       const { cleanQuery: cq, extractedFilters } = parseNaturalQuery(rawQuery, lexiconsRef.current);
       cleanQueryRef.current = cq;
       const mergedFilters = { ...filters, ...extractedFilters };
       const myReqId = ++requestId.current;
-      // FIX: tell the page effect to skip its next run since we're handling page 1 here
       skipNextPageEffectRef.current = true;
       setPage(1);
       fetchCreators(cq, 1, mergedFilters, { reqId: myReqId });
     }, 300);
-
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawQuery, filters]);
 
-  // FIX: Removed `if (page === 1) return` — that was causing "Previous" from page 2
-  // to never re-fetch page 1. Instead we use skipNextPageEffectRef to avoid the
-  // double-fetch that the search/filter effect already handles.
+  // Fires on manual page change only (skipNextPageEffectRef guards against mount double-fetch)
   useEffect(() => {
     if (skipNextPageEffectRef.current) {
       skipNextPageEffectRef.current = false;
@@ -615,6 +632,7 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
+  // ── Actions ────────────────────────────────────────────────────────────────
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
@@ -627,7 +645,6 @@ export default function DashboardPage() {
     ).then(d => setSavedLists(d.lists || []));
   }
 
-  // FIX: Duplicate list name check
   async function createList() {
     if (!newListName.trim()) return;
     const trimmed = newListName.trim();
@@ -638,7 +655,6 @@ export default function DashboardPage() {
     else showToast("Failed to create list", "error");
   }
 
-  // FIX: Loading state + duplicate check for add-to-list
   async function addSelectedToList(listId: string) {
     const ids = Array.from(selectedCreators);
     setAddingToList(true);
@@ -662,7 +678,6 @@ export default function DashboardPage() {
     showToast(parts.join(", "), failed > 0 ? "error" : "success");
   }
 
-  // FIX: Duplicate list name check + loading state for create-and-add flow
   async function createListAndAddSelected() {
     if (!newListName.trim()) return;
     const trimmed = newListName.trim();
@@ -703,8 +718,7 @@ export default function DashboardPage() {
   function toggleCreator(id: string) {
     setSelectedCreators(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   }
@@ -730,19 +744,18 @@ export default function DashboardPage() {
   useEffect(() => {
     try {
       const open = sessionStorage.getItem("lists_sidebar_open");
-      if (open === "true") {
-        setShowListsSidebar(true);
-        sessionStorage.removeItem("lists_sidebar_open");
-      }
+      if (open === "true") { setShowListsSidebar(true); sessionStorage.removeItem("lists_sidebar_open"); }
     } catch {}
   }, []);
 
+  // ── Derived ────────────────────────────────────────────────────────────────
   const activeFiltersCount = Object.entries(filters).filter(([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== "").length;
   const inputStyle = { background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" };
   const selectStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
   const allSelected = creators.length > 0 && creators.every(c => selectedCreators.has(c.username || c.pk));
   const someSelected = selectedCreators.size > 0;
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <>
       <style>{`
@@ -758,86 +771,114 @@ export default function DashboardPage() {
 
         {/* ── Sidebar ── */}
         <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-          <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "var(--accent)" }}>
+          {/* Logo */}
+          <div className="px-4 py-4 border-b" style={{ borderColor: "var(--border)" }}>
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "var(--accent)" }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-4 h-4"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
               </div>
-              <span className="font-semibold text-sm">CreatorDiscover-Veel</span>
+              <div className="min-w-0">
+                <p className="font-semibold text-xs leading-tight truncate" style={{ color: "var(--text-primary)" }}>CreatorDiscover</p>
+                <p className="text-xs leading-tight" style={{ color: "var(--text-secondary)" }}>Veel</p>
+              </div>
             </div>
           </div>
-          <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-            <a href="/dashboard" className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-              Search
+
+          <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
+            {/* Search link */}
+            <a href="/dashboard"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium"
+              style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              <span>Search</span>
             </a>
 
+            {/* Saved Lists */}
             <div>
-              <button
-                onClick={() => setShowListsSidebar(!showListsSidebar)}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium"
-                style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-                Saved Lists
+              <button onClick={() => setShowListsSidebar(!showListsSidebar)}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                <span className="flex-1 text-left">Saved Lists</span>
                 {savedLists.length > 0 && (
-                  <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{savedLists.length}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded-full font-medium"
+                    style={{ background: showListsSidebar ? "rgba(99,102,241,0.2)" : "var(--surface-2)", color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)" }}>
+                    {savedLists.length}
+                  </span>
                 )}
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-3 h-3 transition-transform ${showListsSidebar ? "rotate-180" : ""}`}><polyline points="6 9 12 15 18 9"/></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                  className={`w-3 h-3 flex-shrink-0 transition-transform duration-150 ${showListsSidebar ? "rotate-180" : ""}`}>
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
               </button>
 
               {showListsSidebar && (
-                <div className="mt-1 ml-3 space-y-0.5">
+                <div className="mt-0.5 ml-2 pl-3 border-l space-y-0.5" style={{ borderColor: "var(--border)" }}>
                   {savedLists.length === 0 ? (
-                    <p className="text-xs px-3 py-2" style={{ color: "var(--text-secondary)" }}>No lists yet</p>
+                    <p className="text-xs px-2 py-2" style={{ color: "var(--text-secondary)" }}>No lists yet</p>
                   ) : (
                     savedLists.map(list => (
-                      <button
-                        key={list.id}
-                        onClick={() => openList(list.id)}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-all"
-                        style={{ color: "var(--text-secondary)", background: "transparent" }}
+                      <button key={list.id} onClick={() => openList(list.id)}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left transition-colors"
+                        style={{ color: "var(--text-secondary)" }}
                         onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 flex-shrink-0" style={{ color: "var(--accent)" }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 flex-shrink-0" style={{ color: "var(--accent)", opacity: 0.7 }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
                         <span className="flex-1 truncate">{list.name}</span>
-                        <span className="text-xs px-1 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", minWidth: "1.5rem", textAlign: "center" }}>{list._count.items}</span>
+                        <span className="text-xs tabular-nums px-1 py-0.5 rounded"
+                          style={{ background: "var(--surface-2)", color: "var(--text-secondary)", minWidth: "1.25rem", textAlign: "center" }}>
+                          {list._count.items}
+                        </span>
                       </button>
                     ))
                   )}
-                  <div className="flex gap-1.5 px-1 pt-2 pb-1">
-                    <input
-                      value={newListName}
-                      onChange={e => setNewListName(e.target.value)}
+                  {/* New list input */}
+                  <div className="flex gap-1.5 pt-1.5 pb-1">
+                    <input value={newListName} onChange={e => setNewListName(e.target.value)}
                       onKeyDown={e => e.key === "Enter" && createList()}
                       placeholder="New list…"
-                      className="flex-1 px-2 py-1 rounded text-xs outline-none"
-                      style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                    />
-                    <button onClick={createList} disabled={!newListName.trim()} className="px-2 py-1 rounded text-xs font-medium disabled:opacity-40" style={{ background: "var(--accent)", color: "white" }}>+</button>
+                      className="flex-1 px-2 py-1 rounded-lg text-xs outline-none"
+                      style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
+                    <button onClick={createList} disabled={!newListName.trim()}
+                      className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold disabled:opacity-40 flex-shrink-0"
+                      style={{ background: "var(--accent)", color: "white" }}>+</button>
                   </div>
                 </div>
               )}
             </div>
 
+            {/* Admin */}
             {user?.role === "ADMIN" && (
-              <a href="/admin" className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ color: "var(--text-secondary)" }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                Admin
+              <a href="/admin"
+                className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
+                style={{ color: "var(--text-secondary)" }}
+                onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span>Admin</span>
               </a>
             )}
           </nav>
-          <div className="p-3 border-t" style={{ borderColor: "var(--border)" }}>
-            <div className="px-3 py-2 mb-1">
-              <p className="text-xs font-medium truncate" style={{ color: "var(--text-primary)" }}>{user?.fullName}</p>
-              <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{user?.email}</p>
+
+          {/* User footer */}
+          <div className="p-2 border-t" style={{ borderColor: "var(--border)" }}>
+            <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5" style={{ background: "var(--surface-2)" }}>
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold"
+                style={{ background: "var(--accent)", color: "white" }}>
+                {(user?.fullName || user?.email || "?").charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate leading-tight" style={{ color: "var(--text-primary)" }}>{user?.fullName || "—"}</p>
+                <p className="text-xs truncate leading-tight" style={{ color: "var(--text-secondary)" }}>{user?.email}</p>
+              </div>
             </div>
-            <button onClick={() => setShowSignOut(true)} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ color: "var(--text-secondary)" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; }}
+            <button onClick={() => setShowSignOut(true)}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
+              style={{ color: "var(--text-secondary)" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.08)"; }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              Sign out
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              <span>Sign out</span>
             </button>
           </div>
         </aside>
@@ -867,98 +908,50 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            {/* Filter panel */}
             {showFilters && (
               <div className="mt-4 p-4 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Niche</label>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Niche</label>
                   <select value={filters.niche} onChange={e => setFilters(p => ({ ...p, niche: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All niches</option>
-                    {nicheOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Country</label>
+                    <option value="">All niches</option>{nicheOptions.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Country</label>
                   <select value={filters.country} onChange={e => setFilters(p => ({ ...p, country: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All countries</option>
-                    {countryOptions.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>State</label>
+                    <option value="">All countries</option>{countryOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>State</label>
                   <select value={filters.state} onChange={e => setFilters(p => ({ ...p, state: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All states</option>
-                    {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>City</label>
+                    <option value="">All states</option>{stateOptions.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>City</label>
                   <select value={filters.city} onChange={e => setFilters(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All cities</option>
-                    {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Type</label>
+                    <option value="">All cities</option>{cityOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Type</label>
                   <select value={filters.creatorType} onChange={e => setFilters(p => ({ ...p, creatorType: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any type</option>
-                    {creatorTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Gender</label>
+                    <option value="">Any type</option>{creatorTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Gender</label>
                   <select value={filters.gender} onChange={e => setFilters(p => ({ ...p, gender: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Age Group</label>
+                    <option value="">Any</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Age Group</label>
                   <select value={filters.ageGroup} onChange={e => setFilters(p => ({ ...p, ageGroup: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option><option value="18-24">18–24</option><option value="25-34">25–34</option><option value="35-44">35–44</option><option value="45+">45+</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Size</label>
+                    <option value="">Any</option><option value="18-24">18–24</option><option value="25-34">25–34</option><option value="35-44">35–44</option><option value="45+">45+</option></select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Size</label>
                   <select value={filters.creatorSize} onChange={e => setFilters(p => ({ ...p, creatorSize: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option>
-                    {CREATOR_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Collab Status</label>
+                    <option value="">Any</option>{CREATOR_SIZES.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Collab Status</label>
                   <select value={filters.collabStatus} onChange={e => setFilters(p => ({ ...p, collabStatus: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option><option value="open">Open</option><option value="closed">Closed</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Min Followers</label>
-                  <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))} placeholder="10000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Max Followers</label>
-                  <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))} placeholder="500000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
-                </div>
+                    <option value="">Any</option><option value="open">Open</option><option value="closed">Closed</option></select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Min Followers</label>
+                  <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))} placeholder="10000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} /></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Max Followers</label>
+                  <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))} placeholder="500000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} /></div>
                 {[{ label: "Has Email", key: "hasEmail" }, { label: "Has TikTok", key: "hasTiktok" }, { label: "Has YouTube", key: "hasYoutube" }].map(f => (
-                  <div key={f.key}>
-                    <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{f.label}</label>
+                  <div key={f.key}><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{f.label}</label>
                     <select value={filters[f.key as keyof typeof DEFAULT_FILTERS]} onChange={e => setFilters(p => ({ ...p, [f.key]: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                      <option value="">Any</option><option value="true">Yes</option><option value="false">No</option>
-                    </select>
-                  </div>
+                      <option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
                 ))}
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Sort By</label>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Sort By</label>
                   <select value={filters.sortBy} onChange={e => setFilters(p => ({ ...p, sortBy: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="followerCount">Followers</option>
-                    <option value="lastUpdated">Last Updated</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Order</label>
+                    <option value="followerCount">Followers</option><option value="lastUpdated">Last Updated</option></select></div>
+                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Order</label>
                   <select value={filters.sortOrder} onChange={e => setFilters(p => ({ ...p, sortOrder: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="desc">Descending</option><option value="asc">Ascending</option>
-                  </select>
-                </div>
+                    <option value="desc">Descending</option><option value="asc">Ascending</option></select></div>
                 <div className="col-span-full flex justify-end">
                   <button onClick={clearAllFilters} className="px-4 py-1.5 rounded-lg text-sm" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Clear all filters</button>
                 </div>
@@ -966,10 +959,9 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Active filter pills */}
           <ActiveFilterPills filters={filters} onRemove={removeFilter} />
 
-          {/* Results count + multi-select toolbar */}
+          {/* Results count + toolbar */}
           <div className="px-6 py-2.5 flex items-center gap-3 text-sm" style={{ borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>
             {loading ? (
               <span className="flex items-center gap-2">
@@ -979,29 +971,19 @@ export default function DashboardPage() {
             ) : (
               pagination && `${pagination.total.toLocaleString()} creators found`
             )}
-
             {creators.length > 0 && (
               <div className="ml-auto flex items-center gap-2">
                 {someSelected && (
-                  <button
-                    onClick={() => setShowAddToListModal(true)}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
-                    style={{ background: "var(--accent)", color: "white" }}
-                  >
+                  <button onClick={() => setShowAddToListModal(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: "var(--accent)", color: "white" }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
                     Add {selectedCreators.size} to list
                   </button>
                 )}
                 {someSelected && (
-                  <button onClick={() => setSelectedCreators(new Set())} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
-                    Clear selection
-                  </button>
+                  <button onClick={() => setSelectedCreators(new Set())} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Clear selection</button>
                 )}
-                <button
-                  onClick={toggleSelectAll}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
-                  style={{ background: allSelected ? "rgba(99,102,241,0.15)" : "var(--surface-2)", color: allSelected ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${allSelected ? "var(--accent)" : "var(--border)"}` }}
-                >
+                <button onClick={toggleSelectAll} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+                  style={{ background: allSelected ? "rgba(99,102,241,0.15)" : "var(--surface-2)", color: allSelected ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${allSelected ? "var(--accent)" : "var(--border)"}` }}>
                   <div className="w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0" style={{ borderColor: allSelected ? "var(--accent)" : "var(--text-secondary)", background: allSelected ? "var(--accent)" : "transparent" }}>
                     {allSelected && <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" className="w-2.5 h-2.5"><polyline points="20 6 9 17 4 12"/></svg>}
                   </div>
@@ -1046,29 +1028,18 @@ export default function DashboardPage() {
                   const creatorId = c.username || c.pk;
                   const isSelected = selectedCreators.has(creatorId);
                   return (
-                    <div
-                      key={creatorId}
-                      className="rounded-xl p-4 flex flex-col gap-3 group relative"
-                      style={{
-                        background: "var(--surface)",
-                        border: isSelected ? "1.5px solid var(--accent)" : "1px solid var(--border)",
-                        boxShadow: isSelected ? "0 0 0 3px rgba(99,102,241,0.12)" : "none",
-                      }}
-                    >
+                    <div key={creatorId} className="rounded-xl p-4 flex flex-col group relative"
+                      style={{ background: "var(--surface)", border: isSelected ? "1.5px solid var(--accent)" : "1px solid var(--border)", boxShadow: isSelected ? "0 0 0 3px rgba(99,102,241,0.12)" : "none" }}>
+
                       {/* Checkbox */}
-                      <button
-                        onClick={() => toggleCreator(creatorId)}
+                      <button onClick={() => toggleCreator(creatorId)}
                         className="absolute top-3 right-3 w-5 h-5 rounded border-2 flex items-center justify-center transition-all"
-                        style={{
-                          borderColor: isSelected ? "var(--accent)" : "var(--border)",
-                          background: isSelected ? "var(--accent)" : "transparent",
-                          opacity: isSelected ? 1 : undefined,
-                        }}
-                      >
+                        style={{ borderColor: isSelected ? "var(--accent)" : "var(--border)", background: isSelected ? "var(--accent)" : "transparent" }}>
                         {isSelected && <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" className="w-3 h-3"><polyline points="20 6 9 17 4 12"/></svg>}
                       </button>
 
-                      <div className="flex items-start gap-3 pr-7">
+                      {/* Avatar + name */}
+                      <div className="flex items-start gap-3 pr-7 mb-3">
                         {c.profilePicture ? (
                           <img src={c.profilePicture} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
                         ) : (
@@ -1082,23 +1053,29 @@ export default function DashboardPage() {
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-1.5">
+                      {/* Tags row — fixed min-height so cards align even when empty */}
+                      <div className="flex flex-wrap gap-1.5 mb-3" style={{ minHeight: "1.5rem" }}>
                         {c.nichePrimary && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>{c.nichePrimary}</span>}
                         {c.creatorSize && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(0,0,0,0.2)", color: sizeColor[c.creatorSize] || "var(--text-secondary)" }}>{c.creatorSize}</span>}
                         {c.addressCountry && <span className="px-2 py-0.5 rounded-full text-xs" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>{c.addressCity ? `${c.addressCity}, ` : ""}{c.addressCountry}</span>}
                       </div>
 
-                      <div className="flex items-center gap-2 text-sm">
+                      {/* Followers + gender */}
+                      <div className="flex items-center gap-2 text-sm mb-2">
                         <span className="font-semibold">{fmtNum(c.followerCount)}</span>
                         <span className="text-xs" style={{ color: "var(--text-secondary)" }}>followers</span>
                         {c.gender && <span className="text-xs ml-auto capitalize" style={{ color: "var(--text-secondary)" }}>{c.gender}</span>}
                       </div>
 
-                      {c.totalCollaborationsInRecent25 !== null && c.totalCollaborationsInRecent25 !== undefined && (
-                        <div className="text-xs" style={{ color: "var(--text-secondary)" }}>🤝 {c.totalCollaborationsInRecent25} collabs in last 25 posts</div>
-                      )}
+                      {/* Collabs — fixed height so absence doesn't shift footer */}
+                      <div className="mb-2" style={{ minHeight: "1.25rem" }}>
+                        {c.totalCollaborationsInRecent25 !== null && c.totalCollaborationsInRecent25 !== undefined && (
+                          <div className="text-xs" style={{ color: "var(--text-secondary)" }}>🤝 {c.totalCollaborationsInRecent25} collabs in last 25 posts</div>
+                        )}
+                      </div>
 
-                      <div className="flex gap-1.5">
+                      {/* Social + status badges — mt-auto pushes footer to bottom */}
+                      <div className="flex gap-1.5 mb-3">
                         {c.primarySocialLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>IG</span>}
                         {c.tiktokLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>TT</span>}
                         {c.youtubeLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>YT</span>}
@@ -1111,21 +1088,10 @@ export default function DashboardPage() {
                         )}
                       </div>
 
-                      <div className="flex gap-2 pt-1 border-t" style={{ borderColor: "var(--border)" }}>
-                        <button
-                          onClick={() => c.username && viewCreator(c.username)}
-                          className="flex-1 py-1.5 rounded-lg text-xs font-medium text-center"
-                          style={{ background: "var(--surface-2)", color: "var(--text-primary)" }}
-                        >
-                          View details
-                        </button>
-                        <button
-                          onClick={() => { setSelectedCreators(new Set([creatorId])); setShowAddToListModal(true); }}
-                          className="px-3 py-1.5 rounded-lg text-xs font-medium"
-                          style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}
-                        >
-                          + List
-                        </button>
+                      {/* Footer — always at the same vertical position */}
+                      <div className="mt-auto flex gap-2 pt-3 border-t" style={{ borderColor: "var(--border)" }}>
+                        <button onClick={() => c.username && viewCreator(c.username)} className="flex-1 py-1.5 rounded-lg text-xs font-medium text-center transition-colors" style={{ background: "var(--surface-2)", color: "var(--text-primary)" }}>View details</button>
+                        <button onClick={() => { setSelectedCreators(new Set([creatorId])); setShowAddToListModal(true); }} className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>+ List</button>
                       </div>
                     </div>
                   );
@@ -1135,39 +1101,20 @@ export default function DashboardPage() {
 
             {pagination && pagination.totalPages > 1 && (
               <div className="flex items-center justify-center gap-3 mt-8 pb-4">
-                <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1 || loading}
-                  className="px-4 py-2 rounded-lg text-sm disabled:opacity-40"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                >
-                  ← Previous
-                </button>
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1 || loading} className="px-4 py-2 rounded-lg text-sm disabled:opacity-40" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}>← Previous</button>
                 <span className="text-sm" style={{ color: "var(--text-secondary)" }}>Page {page} of {pagination.totalPages}</span>
-                <button
-                  onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
-                  disabled={page === pagination.totalPages || loading}
-                  className="px-4 py-2 rounded-lg text-sm disabled:opacity-40"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                >
-                  Next →
-                </button>
+                <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))} disabled={page === pagination.totalPages || loading} className="px-4 py-2 rounded-lg text-sm disabled:opacity-40" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}>Next →</button>
               </div>
             )}
           </div>
         </main>
 
-        {/* Multi-select Add to List Modal */}
         {showAddToListModal && (
           <AddToListModal
-            selectedCreators={Array.from(selectedCreators)}
-            savedLists={savedLists}
+            selectedCreators={Array.from(selectedCreators)} savedLists={savedLists}
             onClose={() => { if (!addingToList) setShowAddToListModal(false); }}
-            onAddToList={addSelectedToList}
-            onCreateList={createListAndAddSelected}
-            newListName={newListName}
-            setNewListName={setNewListName}
-            addingToList={addingToList}
+            onAddToList={addSelectedToList} onCreateList={createListAndAddSelected}
+            newListName={newListName} setNewListName={setNewListName} addingToList={addingToList}
           />
         )}
       </div>

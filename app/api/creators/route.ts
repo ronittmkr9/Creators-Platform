@@ -32,10 +32,23 @@ const searchSchema = z.object({
 });
 
 /**
+ * Server-side cache for search results.
+ * Keyed by the full query string so every unique filter combo is cached separately.
+ * The default query (no filters, page 1, sorted by followers desc) is cached just
+ * like every other query — so the very first request after deploy is the only slow one.
+ */
+const SEARCH_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes server-side
+const searchCache = new Map<string, { data: unknown; expires: number }>();
+
+function getCacheKey(params: URLSearchParams): string {
+  // Normalise key: sort params so ?a=1&b=2 and ?b=2&a=1 hit the same entry
+  const sorted = new URLSearchParams([...params.entries()].sort());
+  return sorted.toString();
+}
+
+/**
  * Splits a free-text sentence into individual keywords (min 2 chars, deduped).
- * "fitness girl NYC open collab" → ["fitness", "girl", "nyc", "open", "collab"]
  * ALL keywords must match (AND), each across ALL searchable columns (OR within).
- * This means you can type a natural sentence and every word is searched everywhere.
  */
 function buildKeywordConditions(
   q: string,
@@ -58,7 +71,6 @@ function buildKeywordConditions(
   const blocks: string[] = [];
 
   for (const kw of keywords) {
-    // Every keyword must appear in at least one of these columns
     blocks.push(`(
       username              ILIKE $${i} OR
       full_name             ILIKE $${i} OR
@@ -95,6 +107,14 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
+
+  // ── Server-side cache check ────────────────────────────────────────────────
+  const cacheKey = getCacheKey(searchParams);
+  const cached = searchCache.get(cacheKey);
+  if (cached && cached.expires > Date.now()) {
+    return NextResponse.json(cached.data);
+  }
+
   const parsed = searchSchema.safeParse(Object.fromEntries(searchParams.entries()));
   if (!parsed.success) return NextResponse.json({ error: "Invalid parameters" }, { status: 400 });
 
@@ -109,7 +129,7 @@ export async function GET(req: NextRequest) {
   const values: unknown[] = [];
   let i = 1;
 
-  // ── Free-text: split sentence into keywords, each matched across all fields (AND logic)
+  // ── Free-text keyword search
   if (q && q.trim()) {
     const kw = buildKeywordConditions(q, i);
     if (kw.sql) {
@@ -120,23 +140,27 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Structured filters
-  if (username)     { conditions.push(`username ILIKE $${i}`);                                              values.push(`%${username}%`);    i++; }
-  if (fullName)     { conditions.push(`full_name ILIKE $${i}`);                                             values.push(`%${fullName}%`);    i++; }
-  if (niche)        { conditions.push(`(niche_primary ILIKE $${i} OR niche_secondary ILIKE $${i})`);       values.push(`%${niche}%`);       i++; }
-  if (gender)       { conditions.push(`gender ILIKE $${i}`);                                                values.push(gender);             i++; }
-  if (ageGroup)     { conditions.push(`age_group = $${i}`);                                                 values.push(ageGroup);           i++; }
-  if (country)      { conditions.push(`address_country ILIKE $${i}`);                                       values.push(`%${country}%`);     i++; }
-  if (state)        { conditions.push(`address_state ILIKE $${i}`);                                         values.push(`%${state}%`);       i++; }
-  if (city)         { conditions.push(`address_city ILIKE $${i}`);                                          values.push(`%${city}%`);        i++; }
-  if (creatorSize)  { conditions.push(`creator_size ILIKE $${i}`);                                          values.push(creatorSize);        i++; }
-  if (creatorType)  { conditions.push(`creator_type ILIKE $${i}`);                                          values.push(`%${creatorType}%`); i++; }
-  if (collabStatus) { conditions.push(`collaboration_status ILIKE $${i}`);                                  values.push(`%${collabStatus}%`); i++; }
-  if (followersMin !== undefined) { conditions.push(`follower_count >= $${i}`);                             values.push(followersMin);       i++; }
-  if (followersMax !== undefined) { conditions.push(`follower_count <= $${i}`);                             values.push(followersMax);       i++; }
+  if (username)     { conditions.push(`username ILIKE $${i}`);                                        values.push(`%${username}%`);    i++; }
+  if (fullName)     { conditions.push(`full_name ILIKE $${i}`);                                       values.push(`%${fullName}%`);    i++; }
+  if (niche)        { conditions.push(`(niche_primary ILIKE $${i} OR niche_secondary ILIKE $${i})`); values.push(`%${niche}%`);       i++; }
+  if (gender)       { conditions.push(`gender ILIKE $${i}`);                                          values.push(gender);             i++; }
+  if (ageGroup)     { conditions.push(`age_group = $${i}`);                                           values.push(ageGroup);           i++; }
+  if (country)      { conditions.push(`address_country ILIKE $${i}`);                                 values.push(`%${country}%`);     i++; }
+  if (state)        { conditions.push(`address_state ILIKE $${i}`);                                   values.push(`%${state}%`);       i++; }
+  if (city)         { conditions.push(`address_city ILIKE $${i}`);                                    values.push(`%${city}%`);        i++; }
+  if (creatorSize)  { conditions.push(`creator_size ILIKE $${i}`);                                    values.push(creatorSize);        i++; }
+  if (creatorType)  { conditions.push(`creator_type ILIKE $${i}`);                                    values.push(`%${creatorType}%`); i++; }
+  if (collabStatus) { conditions.push(`collaboration_status ILIKE $${i}`);                            values.push(`%${collabStatus}%`); i++; }
+  if (followersMin !== undefined) { conditions.push(`follower_count >= $${i}`); values.push(followersMin); i++; }
+  if (followersMax !== undefined) { conditions.push(`follower_count <= $${i}`); values.push(followersMax); i++; }
+
+  // ── Boolean presence filters (fixed: all 3 handle both true AND false)
   if (hasEmail   === "true")  conditions.push(`email IS NOT NULL`);
   if (hasEmail   === "false") conditions.push(`email IS NULL`);
   if (hasTiktok  === "true")  conditions.push(`tiktok_link IS NOT NULL`);
+  if (hasTiktok  === "false") conditions.push(`tiktok_link IS NULL`);     // was missing
   if (hasYoutube === "true")  conditions.push(`youtube_link IS NOT NULL`);
+  if (hasYoutube === "false") conditions.push(`youtube_link IS NULL`);    // was missing
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -148,8 +172,8 @@ export async function GET(req: NextRequest) {
   const orderDir = sortOrder.toUpperCase() === "ASC" ? "ASC" : "DESC";
   const skip = (page - 1) * pageSize;
 
-  // Deduplicate by username, keeping the most-recently-analyzed row
-  const dedupeQuery = `
+  // Single CTE — data + count in one round-trip
+  const combinedQuery = `
     WITH deduped AS (
       SELECT DISTINCT ON (LOWER(username))
         pk, username, full_name, first_name, last_name,
@@ -163,31 +187,27 @@ export async function GET(req: NextRequest) {
       ORDER BY
         LOWER(username),
         COALESCE(analyzed_date, latest_post_date, scraped_date) DESC NULLS LAST
+    ),
+    total_count AS (
+      SELECT COUNT(*) AS count FROM deduped
+    ),
+    paged AS (
+      SELECT * FROM deduped
+      ORDER BY ${orderCol} ${orderDir} NULLS LAST
+      LIMIT $${i} OFFSET $${i + 1}
     )
-    SELECT * FROM deduped
-    ORDER BY ${orderCol} ${orderDir} NULLS LAST
-    LIMIT $${i} OFFSET $${i + 1}
+    SELECT
+      paged.*,
+      total_count.count AS total_count
+    FROM paged
+    CROSS JOIN total_count
   `;
 
-  const countQuery = `
-    SELECT COUNT(*) AS count FROM (
-      SELECT DISTINCT ON (LOWER(username)) pk
-      FROM bronze.creators
-      ${whereClause}
-      ORDER BY
-        LOWER(username),
-        COALESCE(analyzed_date, latest_post_date, scraped_date) DESC NULLS LAST
-    ) sub
-  `;
+  const rows = await prisma.$queryRawUnsafe<any[]>(combinedQuery, ...values, pageSize, skip);
 
-  const [creatorsRaw, countRaw] = await Promise.all([
-    prisma.$queryRawUnsafe<any[]>(dedupeQuery, ...values, pageSize, skip),
-    prisma.$queryRawUnsafe<{ count: bigint }[]>(countQuery, ...values),
-  ]);
+  const total = Number(rows[0]?.total_count ?? 0);
 
-  const total = Number(countRaw[0]?.count ?? 0);
-
-  const serialized = creatorsRaw.map((c: any) => ({
+  const creators = rows.map((c: any) => ({
     pk:                            c.pk,
     username:                      c.username,
     fullName:                      c.full_name,
@@ -213,14 +233,25 @@ export async function GET(req: NextRequest) {
     totalCollaborationsInRecent25: c.total_collaborations_in_recent_25_posts,
   }));
 
+  const responseData = {
+    creators,
+    pagination: { total, page, pageSize, totalPages: Math.ceil(total / pageSize) },
+  };
+
+  // Store in server-side cache
+  searchCache.set(cacheKey, { data: responseData, expires: Date.now() + SEARCH_CACHE_TTL_MS });
+
+  // Evict old entries to avoid unbounded memory growth (keep max 200 entries)
+  if (searchCache.size > 200) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest) searchCache.delete(oldest);
+  }
+
   await logAudit(session.userId, "SEARCH", {
     query: q,
     filters: { niche, country, gender, followersMin, followersMax },
     resultsCount: total,
   });
 
-  return NextResponse.json({
-    creators: serialized,
-    pagination: { total, page, pageSize, totalPages: Math.ceil(total / pageSize) },
-  });
+  return NextResponse.json(responseData);
 }

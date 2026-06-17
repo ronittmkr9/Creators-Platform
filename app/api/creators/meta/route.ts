@@ -1,14 +1,15 @@
 // app/api/creators/meta/route.ts
-// Returns all distinct niche, country, and city values from the creators table.
+// Returns all distinct niche, country, city, state, creatorType values.
 // Used to populate filter dropdowns in the dashboard.
 
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma"; // adjust to your prisma import path
+import { prisma } from "@/lib/prisma";
 
-// This data (distinct niches/countries/cities) changes rarely, but the
-// underlying query scans the whole table. Cache it in memory for all users.
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-let cache: { data: { primaryniches: string[]; countries: string[]; cities: string[]; creatorTypes: string[]; states: string[] }; expires: number } | null = null;
+let cache: {
+  data: { primaryniches: string[]; countries: string[]; cities: string[]; creatorTypes: string[]; states: string[] };
+  expires: number;
+} | null = null;
 
 export async function GET() {
   if (cache && cache.expires > Date.now()) {
@@ -16,51 +17,39 @@ export async function GET() {
   }
 
   try {
-    const [nicheRows, countryRows, cityRows, creatorTypeRows, stateRows] = await Promise.all([
-      prisma.creator.findMany({
-        where: { nichePrimary: { not: null } },
-        select: { nichePrimary: true },
-        distinct: ["nichePrimary"],
-        orderBy: { nichePrimary: "asc" },
-      }),
-      prisma.creator.findMany({
-        where: { addressCountry: { not: null } },
-        select: { addressCountry: true },
-        distinct: ["addressCountry"],
-        orderBy: { addressCountry: "asc" },
-      }),
-      prisma.creator.findMany({
-        where: { addressCity: { not: null } },
-        select: { addressCity: true },
-        distinct: ["addressCity"],
-        orderBy: { addressCity: "asc" },
-      }),
-      prisma.creator.findMany({
-        where: { creatorType: { not: null } },
-        select: { creatorType: true },
-        distinct: ["creatorType"],
-        orderBy: { creatorType: "asc" },
-      }),
-      prisma.creator.findMany({
-        where: { addressState: { not: null } },
-        select: { addressState: true },
-        distinct: ["addressState"],
-        orderBy: { addressState: "asc" },
-      }),
-    ]);
+    // Single query — one table scan instead of 5 separate findMany calls
+    const rows = await prisma.$queryRaw<
+      { niche_primary: string | null; address_country: string | null; address_city: string | null; creator_type: string | null; address_state: string | null }[]
+    >`
+      SELECT DISTINCT
+        niche_primary,
+        address_country,
+        address_city,
+        creator_type,
+        address_state
+      FROM bronze.creators
+      WHERE
+        niche_primary IS NOT NULL OR
+        address_country IS NOT NULL OR
+        address_city IS NOT NULL OR
+        creator_type IS NOT NULL OR
+        address_state IS NOT NULL
+    `;
 
-    const data = {
-      primaryniches: nicheRows.map(r => r.nichePrimary).filter(Boolean) as string[],
-      countries: countryRows.map(r => r.addressCountry).filter(Boolean) as string[],
-      cities: cityRows.map(r => r.addressCity).filter(Boolean) as string[],
-      creatorTypes: creatorTypeRows.map(r => r.creatorType).filter(Boolean) as string[],
-      states: stateRows.map(r => r.addressState).filter(Boolean) as string[],
-    };
+    const primaryniches = [...new Set(rows.map(r => r.niche_primary).filter(Boolean) as string[])].sort();
+    const countries     = [...new Set(rows.map(r => r.address_country).filter(Boolean) as string[])].sort();
+    const cities        = [...new Set(rows.map(r => r.address_city).filter(Boolean) as string[])].sort();
+    const creatorTypes  = [...new Set(rows.map(r => r.creator_type).filter(Boolean) as string[])].sort();
+    const states        = [...new Set(rows.map(r => r.address_state).filter(Boolean) as string[])].sort();
 
+    const data = { primaryniches, countries, cities, creatorTypes, states };
     cache = { data, expires: Date.now() + CACHE_TTL_MS };
     return NextResponse.json(data);
   } catch (err) {
     console.error("Meta fetch error:", err);
-    return NextResponse.json({ primaryniches: [], countries: [], cities: [], creatorTypes: [], states: [] }, { status: 500 });
+    return NextResponse.json(
+      { primaryniches: [], countries: [], cities: [], creatorTypes: [], states: [] },
+      { status: 500 },
+    );
   }
 }

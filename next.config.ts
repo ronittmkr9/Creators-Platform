@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
-  allowedDevOrigins: ['192.168.30.148','0.0.0.0'],
+  allowedDevOrigins: ['192.168.30.148','0.0.0.0','192.168.254.14','localhost'],
   output: "standalone",
   serverExternalPackages: [
     "bcryptjs",
