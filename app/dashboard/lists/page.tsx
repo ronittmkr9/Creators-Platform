@@ -122,13 +122,23 @@ function ListPageInner() {
     if (!listId) return;
     try {
       const res = await fetch(`/api/lists/${listId}`);
-      if (res.status === 401) { router.push("/login"); return; }
-      if (!res.ok) { router.push("/dashboard"); return; }
+      if (res.status === 401) { 
+        toast.error("Session expired. Please login again.");
+        router.push("/login"); 
+        return; 
+      }
+      if (!res.ok) { 
+        toast.error("List not found");
+        router.push("/dashboard"); 
+        return; 
+      }
       const data = await res.json();
       setList(data.list);
       setNewName(data.list.name);
-    } catch {
+    } catch (error) {
+      console.error("Error fetching list:", error);
       toast.error("Failed to load list");
+      router.push("/dashboard");
     } finally {
       setLoading(false);
     }
@@ -140,7 +150,8 @@ function ListPageInner() {
         fetch("/api/lists").then(r => r.ok ? r.json() : { lists: [] })
       );
       setAllLists(data.lists || []);
-    } catch {
+    } catch (error) {
+      console.error("Error fetching lists:", error);
       // non-critical, sidebar just stays empty
     }
   }
@@ -163,22 +174,42 @@ function ListPageInner() {
   async function createList() {
     if (!newListName.trim() || creatingList) return;
     const trimmed = newListName.trim();
+    
+    // Check for duplicate list names (case-insensitive)
     const duplicate = allLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
-    if (duplicate) { toast.error(`A list named "${trimmed}" already exists`); return; }
+    if (duplicate) { 
+      toast.error(`A list named "${trimmed}" already exists`); 
+      return; 
+    }
+    
     setCreatingList(true);
+    const toastId = toast.loading("Creating list...");
+    
     try {
       const res = await fetch("/api/lists", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: trimmed }),
       });
-      if (!res.ok) throw new Error();
+      
+      if (!res.ok) {
+        // Check if the API returned a duplicate error
+        const errorData = await res.json().catch(() => ({}));
+        if (errorData.error && errorData.error.toLowerCase().includes("already exists")) {
+          toast.error(`A list named "${trimmed}" already exists`, { id: toastId });
+          setCreatingList(false);
+          return;
+        }
+        throw new Error("Failed to create list");
+      }
+      
       setNewListName("");
       invalidateCache("lists");
       await fetchAllLists();
-      toast.success("List created");
-    } catch {
-      toast.error("Failed to create list");
+      toast.success("List created successfully", { id: toastId });
+    } catch (error) {
+      console.error("Error creating list:", error);
+      toast.error("Failed to create list", { id: toastId });
     } finally {
       setCreatingList(false);
     }
@@ -190,6 +221,13 @@ function ListPageInner() {
     if (!trimmed) return;
     if (trimmed === list.name) { setEditingName(false); return; }
 
+    // Check for duplicate names when renaming (excluding the current list)
+    const duplicate = allLists.some(l => l.id !== listId && l.name.toLowerCase() === trimmed.toLowerCase());
+    if (duplicate) {
+      toast.error(`A list named "${trimmed}" already exists`);
+      return;
+    }
+
     confirm({
       title: "Rename list",
       body: `Rename "${list.name}" to "${trimmed}"?`,
@@ -200,21 +238,25 @@ function ListPageInner() {
         setEditingName(false);
         setSavingName(true);
 
+        const toastId = toast.loading("Renaming list...");
         fetch(`/api/lists/${listId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: trimmed }),
         })
           .then(res => {
-            if (!res.ok) throw new Error();
-            toast.success("List renamed");
+            if (!res.ok) throw new Error("Failed to rename list");
+            toast.dismiss(toastId);
+            toast.success("List renamed successfully");
             invalidateCache("lists");
             fetchAllLists();
           })
-          .catch(() => {
+          .catch((error) => {
+            console.error("Error renaming list:", error);
+            toast.dismiss(toastId);
+            toast.error("Failed to rename list");
             setList(prev => prev ? { ...prev, name: previousName } : prev);
             setNewName(previousName);
-            toast.error("Failed to rename list");
           })
           .finally(() => setSavingName(false));
       },
@@ -237,16 +279,21 @@ function ListPageInner() {
         setList(prev => prev ? { ...prev, items: prev.items.filter(i => i.id !== item.id) } : prev);
         setSelectedIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
 
+        const toastId = toast.loading("Removing creator...");
         fetch(`/api/lists/${listId}/items?creatorId=${encodeURIComponent(creatorId)}`, { method: "DELETE" })
           .then(res => {
-            if (!res.ok) throw new Error();
-            toast.success("Creator removed");
+            if (!res.ok) throw new Error("Failed to remove creator");
+            toast.dismiss(toastId);
+            toast.success("Creator removed successfully");
             invalidateCache("lists");
             fetchAllLists();
           })
-          .catch(() => {
-            setList(prev => prev ? { ...prev, items: [...prev.items, item] } : prev);
+          .catch((error) => {
+            console.error("Error removing creator:", error);
+            toast.dismiss(toastId);
             toast.error("Failed to remove creator");
+            // Restore the item
+            setList(prev => prev ? { ...prev, items: [...prev.items, item] } : prev);
           })
           .finally(() => setRemovingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; }));
       },
@@ -273,28 +320,38 @@ function ListPageInner() {
 
         const toastId = toast.loading(`Removing ${count} creator${count !== 1 ? "s" : ""}…`);
         let failed = 0;
-        await Promise.all(
-          itemsToRemove.map(item =>
-            fetch(`/api/lists/${listId}/items?creatorId=${encodeURIComponent(item.creatorId)}`, { method: "DELETE" })
-              .then(res => { if (!res.ok) throw new Error(); })
-              .catch(() => { failed++; })
-          )
-        );
+        try {
+          await Promise.all(
+            itemsToRemove.map(async (item) => {
+              try {
+                const res = await fetch(`/api/lists/${listId}/items?creatorId=${encodeURIComponent(item.creatorId)}`, { method: "DELETE" });
+                if (!res.ok) throw new Error();
+              } catch {
+                failed++;
+              }
+            })
+          );
 
-        if (failed > 0) {
-          // Restore failed items
-          const failedItems = itemsToRemove.slice(0, failed);
-          setList(prev => prev ? { ...prev, items: [...prev.items, ...failedItems] } : prev);
-          toast.error(`${failed} creator${failed !== 1 ? "s" : ""} could not be removed`, { id: toastId });
-        } else {
-          toast.success(`${count - failed} creator${count - failed !== 1 ? "s" : ""} removed`, { id: toastId });
+          if (failed > 0) {
+            // Restore failed items
+            const failedItems = itemsToRemove.slice(0, failed);
+            setList(prev => prev ? { ...prev, items: [...prev.items, ...failedItems] } : prev);
+            toast.error(`${failed} creator${failed !== 1 ? "s" : ""} could not be removed`, { id: toastId });
+          } else {
+            toast.success(`${count} creator${count !== 1 ? "s" : ""} removed successfully`, { id: toastId });
+          }
+
+          invalidateCache("lists");
+          fetchAllLists();
+        } catch (error) {
+          console.error("Error in bulk remove:", error);
+          toast.error("An error occurred during removal", { id: toastId });
+          // Restore all items
+          setList(prev => prev ? { ...prev, items: [...prev.items, ...itemsToRemove] } : prev);
+        } finally {
+          setBulkRemoving(false);
+          setRemovingIds(prev => { const n = new Set(prev); itemIds.forEach(id => n.delete(id)); return n; });
         }
-
-        invalidateCache("lists");
-        fetchAllLists();
-        setBulkRemoving(false);
-        // Cleanup any leftover removingIds
-        setRemovingIds(prev => { const n = new Set(prev); itemIds.forEach(id => n.delete(id)); return n; });
       },
     });
   }
@@ -308,13 +365,20 @@ function ListPageInner() {
       danger: true,
       onConfirm: () => {
         setDeletingList(true);
+        const toastId = toast.loading("Deleting list...");
         fetch(`/api/lists/${listId}`, { method: "DELETE" })
           .then(res => {
-            if (!res.ok) throw new Error();
-            toast.success("List deleted");
+            if (!res.ok) throw new Error("Failed to delete list");
+            toast.dismiss(toastId);
+            toast.success("List deleted successfully");
+            // Clear session storage to prevent stale list name
+            try { sessionStorage.removeItem("lists_sidebar_open"); } catch {}
+            // Navigate back to dashboard
             goBackToDashboard();
           })
-          .catch(() => {
+          .catch((error) => {
+            console.error("Error deleting list:", error);
+            toast.dismiss(toastId);
             toast.error("Failed to delete list");
             setDeletingList(false);
           });
@@ -325,10 +389,10 @@ function ListPageInner() {
   async function exportCSV() {
     if (!listId) return;
     setExporting(true);
-    const toastId = toast.loading("Exporting…");
+    const toastId = toast.loading("Exporting...");
     try {
       const res = await fetch(`/api/lists/${listId}/export`);
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -336,8 +400,9 @@ function ListPageInner() {
       a.download = `${list?.name || "list"}.csv`;
       a.click();
       URL.revokeObjectURL(url);
-      toast.success("CSV downloaded", { id: toastId });
-    } catch {
+      toast.success("CSV downloaded successfully", { id: toastId });
+    } catch (error) {
+      console.error("Export error:", error);
       toast.error("Export failed", { id: toastId });
     } finally {
       setExporting(false);
@@ -839,7 +904,17 @@ function ListPageInner() {
 
 export default function ListPage() {
   return (
-    <Suspense>
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--background)" }}>
+        <span className="flex items-center gap-2.5 text-sm" style={{ color: "var(--text-secondary)" }}>
+          <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5">
+            <circle cx="12" cy="12" r="10" strokeOpacity="0.25"/>
+            <path d="M12 2a10 10 0 0 1 10 10"/>
+          </svg>
+          Loading...
+        </span>
+      </div>
+    }>
       <ListPageInner />
     </Suspense>
   );

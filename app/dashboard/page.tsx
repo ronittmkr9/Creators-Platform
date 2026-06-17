@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { cachedFetch, getCached, getCacheEntry, invalidateCache } from "@/lib/client-cache";
+import { cachedFetch, getCached, getCacheEntry, invalidateCache, setCached } from "@/lib/client-cache";
+import toast, { Toaster } from "react-hot-toast";
 
 interface Creator {
   pk: string;
@@ -31,6 +32,13 @@ interface Creator {
 interface Pagination { total: number; page: number; pageSize: number; totalPages: number; }
 interface SavedList { id: string; name: string; _count: { items: number }; }
 interface User { id: string; email: string; fullName: string; role: string; }
+interface CreatorsMetaResponse {
+  primaryniches?: string[];
+  countries?: string[];
+  cities?: string[];
+  states?: string[];
+  creatorTypes?: string[];
+}
 interface Toast { id: number; msg: string; type: "success" | "error" | "info"; }
 interface ConfirmDialog { title: string; body: string; onConfirm: () => void; confirmLabel?: string; danger?: boolean; }
 
@@ -206,8 +214,8 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
 
   for (let i = 0; i < tokens.length; i++) {
     if (consumed.has(i)) continue;
-    if (tokens[i] === "open") { extracted.collabStatus = "open"; consumed.add(i); break; }
-    if (tokens[i] === "closed") { extracted.collabStatus = "closed"; consumed.add(i); break; }
+    if (tokens[i] === "Active") { extracted.collabStatus = "active"; consumed.add(i); break; }
+    if (tokens[i] === "Closed") { extracted.collabStatus = "closed"; consumed.add(i); break; }
   }
 
   for (let i = 0; i < tokens.length - 1; i++) {
@@ -266,6 +274,7 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
   return { cleanQuery, extractedFilters: extracted };
 }
 
+// ─── Toast Stack (Legacy, kept for compatibility) ──────────────────────────
 let toastCounter = 0;
 function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
@@ -475,21 +484,25 @@ export default function DashboardPage() {
    * the plain defaults above — no hydration mismatch.
    */
   useLayoutEffect(() => {
-    const s = loadDashboardState();
-    if (!s) return;
+    try {
+      const s = loadDashboardState();
+      if (!s) return;
 
-    // Restore UI state from session
-    if (s.rawQuery) setRawQuery(s.rawQuery);
-    if (s.page && s.page !== 1) setPage(s.page);
-    if (s.filters) setFilters(s.filters);
+      // Restore UI state from session
+      if (s.rawQuery) setRawQuery(s.rawQuery);
+      if (s.page && s.page !== 1) setPage(s.page);
+      if (s.filters) setFilters(s.filters);
 
-    // Immediately show cached creators — zero network call, zero spinner
-    const { key } = buildCacheKey(s.rawQuery ?? "", s.page ?? 1, s.filters ?? { ...DEFAULT_FILTERS });
-    const cached = getCached<CreatorResult>(key);
-    if (cached) {
-      setCreators(cached.creators);
-      setPagination(cached.pagination);
-      // loading stays false — we have data to show right away
+      // Immediately show cached creators — zero network call, zero spinner
+      const { key } = buildCacheKey(s.rawQuery ?? "", s.page ?? 1, s.filters ?? { ...DEFAULT_FILTERS });
+      const cached = getCached<CreatorResult>(key);
+      if (cached) {
+        setCreators(cached.creators);
+        setPagination(cached.pagination);
+        // loading stays false — we have data to show right away
+      }
+    } catch (error) {
+      console.error("Error restoring dashboard state:", error);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -507,27 +520,52 @@ export default function DashboardPage() {
 
   // ── Data fetching ──────────────────────────────────────────────────────────
   useEffect(() => {
-    cachedFetch("auth/me", () =>
-      fetch("/api/auth/me").then(r => { if (!r.ok) { router.push("/login"); return null; } return r.json(); })
-    ).then(d => { if (d) setUser(d.user); }).catch(() => router.push("/login"));
+    try {
+      cachedFetch("auth/me", () =>
+        fetch("/api/auth/me").then(r => { if (!r.ok) { router.push("/login"); return null; } return r.json(); })
+      ).then(d => { if (d) setUser(d.user); }).catch(() => router.push("/login"));
 
-    cachedFetch("lists", () =>
-      fetch("/api/lists").then(r => r.ok ? r.json() : { lists: [] })
-    ).then(d => setSavedLists(d.lists || []));
+      // Always fetch lists fresh on mount — bypasses the cache entirely so
+      // navigating back from the lists page (where a list may have been deleted
+      // or renamed) always shows up-to-date data without a stale-cache hit.
+      invalidateCache("lists");
+      fetch("/api/lists")
+        .then(r => r.ok ? r.json() : { lists: [] })
+        .then(d => {
+          const lists = d.lists || [];
+          // Write back into the store so any other cachedFetch("lists") call
+          // within this session sees the fresh data without a second round-trip.
+          setCached("lists", { lists });
+          setSavedLists(lists);
+        })
+        .catch(err => {
+          console.error("Error fetching lists on mount:", err);
+          toast.error("Failed to load lists");
+        });
 
-    cachedFetch("creators/meta", () =>
-      fetch("/api/creators/meta").then(r => r.ok ? r.json() : {})
-    ).then(d => {
-      setNicheOptions((d.primaryniches || []).filter(Boolean).sort());
-      setCountryOptions((d.countries || []).filter(Boolean).sort());
-      setCityOptions((d.cities || []).filter(Boolean).sort());
-      setStateOptions((d.states || []).filter(Boolean).sort());
-      setCreatorTypeOptions((d.creatorTypes || []).filter(Boolean).sort());
-    });
-  }, []);// eslint-disable-line react-hooks/exhaustive-deps
+      cachedFetch("creators/meta", () =>
+        fetch("/api/creators/meta").then(r => r.ok ? r.json() : {})
+      ).then((d: CreatorsMetaResponse) => {
+        setNicheOptions((d.primaryniches || []).filter(Boolean).sort());
+        setCountryOptions((d.countries || []).filter(Boolean).sort());
+        setCityOptions((d.cities || []).filter(Boolean).sort());
+        setStateOptions((d.states || []).filter(Boolean).sort());
+        setCreatorTypeOptions((d.creatorTypes || []).filter(Boolean).sort());
+      }).catch(err => {
+        console.error("Error fetching creators meta:", err);
+      });
+    } catch (error) {
+      console.error("Error fetching initial data:", error);
+      toast.error("Failed to load initial data");
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    saveDashboardState({ rawQuery, filters, page });
+    try {
+      saveDashboardState({ rawQuery, filters, page });
+    } catch (error) {
+      console.error("Error saving dashboard state:", error);
+    }
   }, [rawQuery, filters, page]);
 
   /**
@@ -547,61 +585,68 @@ export default function DashboardPage() {
     f: typeof DEFAULT_FILTERS,
     opts?: { reqId?: number }
   ) => {
-    const { key, params } = buildCacheKey(q, p, f);
-    const myReqId = opts?.reqId ?? requestId.current;
-
-    // Single fetcher definition reused for both foreground and background paths
-    const fetcher = (): Promise<CreatorResult> => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort("timeout"), 30_000);
-      return fetch(`/api/creators?${params}`, { signal: controller.signal })
-        .then(async (res) => {
-          clearTimeout(timeoutId);
-          if (res.status === 401) { router.push("/login"); throw new Error("401"); }
-          if (!res.ok) throw new Error("fetch failed");
-          const json = await res.json();
-          return { creators: json.creators || [], pagination: json.pagination || null };
-        })
-        .catch((err) => { clearTimeout(timeoutId); throw err; });
-    };
-
-    // Check the store directly so we can inspect both the data AND the age
-    // without triggering a redundant cachedFetch call.
-    const entry = getCacheEntry<CreatorResult>(key);
-    if (entry) {
-      // Always show cached data immediately — no spinner regardless of staleness
-      setCreators(entry.data.creators);
-      setPagination(entry.data.pagination);
-      setLoading(false);
-
-      // Only hit the network if data is actually stale
-      const isStale = Date.now() - entry.fetchedAt >= SEARCH_CACHE_TTL_MS;
-      if (isStale) {
-        cachedFetch<CreatorResult>(key, fetcher, SEARCH_CACHE_TTL_MS)
-          .then((fresh) => {
-            if (myReqId !== requestId.current) return;
-            setCreators(fresh.creators);
-            setPagination(fresh.pagination);
-          })
-          .catch(() => { /* silent — user already sees valid cached data */ });
-      }
-      return;
-    }
-
-    // Cache miss — genuine first load, show spinner
-    setLoading(true);
     try {
-      const data = await cachedFetch<CreatorResult>(key, fetcher, SEARCH_CACHE_TTL_MS);
-      if (myReqId !== requestId.current) return;
-      setCreators(data.creators);
-      setPagination(data.pagination);
-    } catch (err: unknown) {
-      if (myReqId !== requestId.current) return;
-      if (err instanceof Error && err.message === "401") return;
-      const isTimeout = err instanceof Error && err.name === "AbortError";
-      showToast(isTimeout ? "Request timed out — please try again" : "Failed to load creators", "error");
-    } finally {
-      if (myReqId === requestId.current) setLoading(false);
+      const { key, params } = buildCacheKey(q, p, f);
+      const myReqId = opts?.reqId ?? requestId.current;
+
+      // Single fetcher definition reused for both foreground and background paths
+      const fetcher = (): Promise<CreatorResult> => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort("timeout"), 30_000);
+        return fetch(`/api/creators?${params}`, { signal: controller.signal })
+          .then(async (res) => {
+            clearTimeout(timeoutId);
+            if (res.status === 401) { router.push("/login"); throw new Error("401"); }
+            if (!res.ok) throw new Error("fetch failed");
+            const json = await res.json();
+            return { creators: json.creators || [], pagination: json.pagination || null };
+          })
+          .catch((err) => { clearTimeout(timeoutId); throw err; });
+      };
+
+      // Check the store directly so we can inspect both the data AND the age
+      // without triggering a redundant cachedFetch call.
+      const entry = getCacheEntry<CreatorResult>(key);
+      if (entry) {
+        // Always show cached data immediately — no spinner regardless of staleness
+        setCreators(entry.data.creators);
+        setPagination(entry.data.pagination);
+        setLoading(false);
+
+        // Only hit the network if data is actually stale
+        const isStale = Date.now() - entry.fetchedAt >= SEARCH_CACHE_TTL_MS;
+        if (isStale) {
+          cachedFetch<CreatorResult>(key, fetcher, SEARCH_CACHE_TTL_MS)
+            .then((fresh) => {
+              if (myReqId !== requestId.current) return;
+              setCreators(fresh.creators);
+              setPagination(fresh.pagination);
+            })
+            .catch(() => { /* silent — user already sees valid cached data */ });
+        }
+        return;
+      }
+
+      // Cache miss — genuine first load, show spinner
+      setLoading(true);
+      try {
+        const data = await cachedFetch<CreatorResult>(key, fetcher, SEARCH_CACHE_TTL_MS);
+        if (myReqId !== requestId.current) return;
+        setCreators(data.creators);
+        setPagination(data.pagination);
+      } catch (err: unknown) {
+        if (myReqId !== requestId.current) return;
+        if (err instanceof Error && err.message === "401") return;
+        const isTimeout = err instanceof Error && err.name === "AbortError";
+        const errorMsg = isTimeout ? "Request timed out — please try again" : "Failed to load creators";
+        showToast(errorMsg, "error");
+        toast.error(errorMsg);
+      } finally {
+        if (myReqId === requestId.current) setLoading(false);
+      }
+    } catch (error) {
+      console.error("Error in fetchCreators:", error);
+      toast.error("An unexpected error occurred");
     }
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -609,13 +654,18 @@ export default function DashboardPage() {
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
-      const { cleanQuery: cq, extractedFilters } = parseNaturalQuery(rawQuery, lexiconsRef.current);
-      cleanQueryRef.current = cq;
-      const mergedFilters = { ...filters, ...extractedFilters };
-      const myReqId = ++requestId.current;
-      skipNextPageEffectRef.current = true;
-      setPage(1);
-      fetchCreators(cq, 1, mergedFilters, { reqId: myReqId });
+      try {
+        const { cleanQuery: cq, extractedFilters } = parseNaturalQuery(rawQuery, lexiconsRef.current);
+        cleanQueryRef.current = cq;
+        const mergedFilters = { ...filters, ...extractedFilters };
+        const myReqId = ++requestId.current;
+        skipNextPageEffectRef.current = true;
+        setPage(1);
+        fetchCreators(cq, 1, mergedFilters, { reqId: myReqId });
+      } catch (error) {
+        console.error("Error parsing query:", error);
+        toast.error("Error parsing search query");
+      }
     }, 300);
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -627,69 +677,134 @@ export default function DashboardPage() {
       skipNextPageEffectRef.current = false;
       return;
     }
-    const myReqId = ++requestId.current;
-    fetchCreators(cleanQueryRef.current, page, filters, { reqId: myReqId });
+    try {
+      const myReqId = ++requestId.current;
+      fetchCreators(cleanQueryRef.current, page, filters, { reqId: myReqId });
+    } catch (error) {
+      console.error("Error fetching creators on page change:", error);
+      toast.error("Error loading page");
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      toast.success("Signed out successfully");
+      router.push("/login");
+    } catch (error) {
+      console.error("Logout error:", error);
+      toast.error("Failed to sign out");
+    }
   }
 
   function refreshLists() {
+    // Invalidate then fetch directly — always hits network after a mutation.
+    // We use setCached to update the module-level store so future cachedFetch
+    // calls see the fresh data without a redundant network round-trip.
     invalidateCache("lists");
-    cachedFetch("lists", () =>
-      fetch("/api/lists").then(r => r.json())
-    ).then(d => setSavedLists(d.lists || []));
+    fetch("/api/lists")
+      .then(r => r.ok ? r.json() : { lists: [] })
+      .then(d => {
+        const lists = d.lists || [];
+        setCached("lists", { lists });
+        setSavedLists(lists);
+      })
+      .catch(err => {
+        console.error("Error refreshing lists:", err);
+        toast.error("Failed to refresh lists");
+      });
   }
 
   async function createList() {
-    if (!newListName.trim()) return;
-    const trimmed = newListName.trim();
-    const duplicate = savedLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
-    if (duplicate) { showToast(`A list named "${trimmed}" already exists`, "error"); return; }
-    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed }) });
-    if (res.ok) { setNewListName(""); refreshLists(); showToast("List created"); }
-    else showToast("Failed to create list", "error");
+    try {
+      if (!newListName.trim()) return;
+      const trimmed = newListName.trim();
+      const duplicate = savedLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
+      if (duplicate) {
+        toast.error(`A list named "${trimmed}" already exists`);
+        return;
+      }
+      const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed }) });
+      if (res.ok) {
+        setNewListName("");
+        refreshLists();
+        toast.success("List created successfully");
+      } else {
+        toast.error("Failed to create list");
+      }
+    } catch (error) {
+      console.error("Error creating list:", error);
+      toast.error("An error occurred while creating the list");
+    }
   }
 
   async function addSelectedToList(listId: string) {
-    const ids = Array.from(selectedCreators);
-    setAddingToList(true);
-    let added = 0, skipped = 0, failed = 0;
-    await Promise.all(ids.map(async creatorId => {
-      const res = await fetch(`/api/lists/${listId}/items`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ creatorId }),
-      });
-      if (res.ok) added++;
-      else if (res.status === 409) skipped++;
-      else failed++;
-    }));
-    refreshLists();
-    setAddingToList(false);
-    setShowAddToListModal(false);
-    setSelectedCreators(new Set());
-    const parts = [];
-    if (added > 0) parts.push(`${added} added`);
-    if (skipped > 0) parts.push(`${skipped} already in list`);
-    if (failed > 0) parts.push(`${failed} failed`);
-    showToast(parts.join(", "), failed > 0 ? "error" : "success");
+    try {
+      const ids = Array.from(selectedCreators);
+      setAddingToList(true);
+      let added = 0, skipped = 0, failed = 0;
+      await Promise.all(ids.map(async creatorId => {
+        try {
+          const res = await fetch(`/api/lists/${listId}/items`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ creatorId }),
+          });
+          if (res.ok) added++;
+          else if (res.status === 409) skipped++;
+          else failed++;
+        } catch {
+          failed++;
+        }
+      }));
+      refreshLists();
+      setAddingToList(false);
+      setShowAddToListModal(false);
+      setSelectedCreators(new Set());
+      const parts = [];
+      if (added > 0) parts.push(`${added} added`);
+      if (skipped > 0) parts.push(`${skipped} already in list`);
+      if (failed > 0) parts.push(`${failed} failed`);
+      const message = parts.join(", ");
+      if (failed > 0) {
+        toast.error(message);
+      } else if (added > 0) {
+        toast.success(message);
+      } else {
+        toast.success("No changes made");
+      }
+    } catch (error) {
+      console.error("Error adding to list:", error);
+      toast.error("Failed to add creators to list");
+      setAddingToList(false);
+    }
   }
 
   async function createListAndAddSelected() {
-    if (!newListName.trim()) return;
-    const trimmed = newListName.trim();
-    const duplicate = savedLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
-    if (duplicate) { showToast(`A list named "${trimmed}" already exists`, "error"); return; }
-    setAddingToList(true);
-    const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed }) });
-    if (!res.ok) { setAddingToList(false); showToast("Failed to create list", "error"); return; }
-    const data = await res.json();
-    setNewListName("");
-    refreshLists();
-    await addSelectedToList(data.list.id);
+    try {
+      if (!newListName.trim()) return;
+      const trimmed = newListName.trim();
+      const duplicate = savedLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
+      if (duplicate) {
+        toast.error(`A list named "${trimmed}" already exists`);
+        return;
+      }
+      setAddingToList(true);
+      const res = await fetch("/api/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed }) });
+      if (!res.ok) {
+        setAddingToList(false);
+        toast.error("Failed to create list");
+        return;
+      }
+      const data = await res.json();
+      setNewListName("");
+      refreshLists();
+      await addSelectedToList(data.list.id);
+    } catch (error) {
+      console.error("Error creating list and adding selected:", error);
+      toast.error("An error occurred");
+      setAddingToList(false);
+    }
   }
 
   function handleDeleteList(id: string, name: string) {
@@ -698,47 +813,83 @@ export default function DashboardPage() {
       body: `"${name}" and all its creators will be permanently deleted. This cannot be undone.`,
       confirmLabel: "Delete list", danger: true,
       onConfirm: async () => {
-        const res = await fetch(`/api/lists/${id}`, { method: "DELETE" });
-        if (res.ok) { refreshLists(); showToast("List deleted"); }
-        else showToast("Failed to delete list", "error");
+        try {
+          const res = await fetch(`/api/lists/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            refreshLists();
+            toast.success("List deleted successfully");
+          } else {
+            toast.error("Failed to delete list");
+          }
+        } catch (error) {
+          console.error("Error deleting list:", error);
+          toast.error("An error occurred while deleting the list");
+        }
       },
     });
   }
 
   function clearAllFilters() {
-    setFilters({ ...DEFAULT_FILTERS });
-    setRawQuery("");
-    cleanQueryRef.current = "";
+    try {
+      setFilters({ ...DEFAULT_FILTERS });
+      setRawQuery("");
+      cleanQueryRef.current = "";
+      toast.success("All filters cleared");
+    } catch (error) {
+      console.error("Error clearing filters:", error);
+    }
   }
 
   function removeFilter(key: string) {
-    setFilters(prev => ({ ...prev, [key]: "" }));
+    try {
+      setFilters(prev => ({ ...prev, [key]: "" }));
+    } catch (error) {
+      console.error("Error removing filter:", error);
+    }
   }
 
   function toggleCreator(id: string) {
-    setSelectedCreators(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    try {
+      setSelectedCreators(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    } catch (error) {
+      console.error("Error toggling creator:", error);
+    }
   }
 
   function toggleSelectAll() {
-    const allIds = creators.map(c => c.username || c.pk);
-    if (allIds.every(id => selectedCreators.has(id))) {
-      setSelectedCreators(new Set());
-    } else {
-      setSelectedCreators(new Set(allIds));
+    try {
+      const allIds = creators.map(c => c.username || c.pk);
+      if (allIds.every(id => selectedCreators.has(id))) {
+        setSelectedCreators(new Set());
+      } else {
+        setSelectedCreators(new Set(allIds));
+      }
+    } catch (error) {
+      console.error("Error toggling select all:", error);
     }
   }
 
   function viewCreator(username: string) {
-    router.push(`/dashboard/creators/${username}`);
+    try {
+      router.push(`/dashboard/creators/${username}`);
+    } catch (error) {
+      console.error("Error navigating to creator:", error);
+      toast.error("Failed to navigate to creator");
+    }
   }
 
   function openList(listId: string) {
-    try { sessionStorage.setItem("lists_sidebar_open", "true"); } catch {}
-    router.push(`/dashboard/lists?id=${listId}`);
+    try {
+      sessionStorage.setItem("lists_sidebar_open", "true");
+      router.push(`/dashboard/lists?id=${listId}`);
+    } catch (error) {
+      console.error("Error opening list:", error);
+      toast.error("Failed to open list");
+    }
   }
 
   useEffect(() => {
@@ -766,6 +917,25 @@ export default function DashboardPage() {
         * { -webkit-user-select: none; user-select: none; }
         input, textarea { -webkit-user-select: text; user-select: text; }
       `}</style>
+
+      {/* react-hot-toast portal */}
+      <Toaster
+        position="bottom-center"
+        toastOptions={{
+          style: {
+            background: "var(--surface)",
+            color: "var(--text-primary)",
+            border: "1px solid var(--border)",
+            borderRadius: "9999px",
+            fontSize: "0.875rem",
+            fontWeight: 500,
+            padding: "10px 18px",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+          },
+          success: { iconTheme: { primary: "var(--accent)", secondary: "white" } },
+          error: { iconTheme: { primary: "#ef4444", secondary: "white" } },
+        }}
+      />
 
       <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
 
@@ -936,7 +1106,7 @@ export default function DashboardPage() {
                     <option value="">Any</option>{CREATOR_SIZES.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
                 <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Collab Status</label>
                   <select value={filters.collabStatus} onChange={e => setFilters(p => ({ ...p, collabStatus: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option><option value="open">Open</option><option value="closed">Closed</option></select></div>
+                    <option value="">Any</option><option value="active">Active</option><option value="closed">Closed</option></select></div>
                 <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Min Followers</label>
                   <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))} placeholder="10000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} /></div>
                 <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Max Followers</label>
@@ -1053,7 +1223,7 @@ export default function DashboardPage() {
                         </div>
                       </div>
 
-                      {/* Tags row — fixed min-height so cards align even when empty */}
+                      {/* Tags row */}
                       <div className="flex flex-wrap gap-1.5 mb-3" style={{ minHeight: "1.5rem" }}>
                         {c.nichePrimary && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>{c.nichePrimary}</span>}
                         {c.creatorSize && <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{ background: "rgba(0,0,0,0.2)", color: sizeColor[c.creatorSize] || "var(--text-secondary)" }}>{c.creatorSize}</span>}
@@ -1067,14 +1237,14 @@ export default function DashboardPage() {
                         {c.gender && <span className="text-xs ml-auto capitalize" style={{ color: "var(--text-secondary)" }}>{c.gender}</span>}
                       </div>
 
-                      {/* Collabs — fixed height so absence doesn't shift footer */}
+                      {/* Collabs */}
                       <div className="mb-2" style={{ minHeight: "1.25rem" }}>
                         {c.totalCollaborationsInRecent25 !== null && c.totalCollaborationsInRecent25 !== undefined && (
                           <div className="text-xs" style={{ color: "var(--text-secondary)" }}>🤝 {c.totalCollaborationsInRecent25} collabs in last 25 posts</div>
                         )}
                       </div>
 
-                      {/* Social + status badges — mt-auto pushes footer to bottom */}
+                      {/* Social + status badges */}
                       <div className="flex gap-1.5 mb-3">
                         {c.primarySocialLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>IG</span>}
                         {c.tiktokLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>TT</span>}
@@ -1088,7 +1258,7 @@ export default function DashboardPage() {
                         )}
                       </div>
 
-                      {/* Footer — always at the same vertical position */}
+                      {/* Footer */}
                       <div className="mt-auto flex gap-2 pt-3 border-t" style={{ borderColor: "var(--border)" }}>
                         <button onClick={() => c.username && viewCreator(c.username)} className="flex-1 py-1.5 rounded-lg text-xs font-medium text-center transition-colors" style={{ background: "var(--surface-2)", color: "var(--text-primary)" }}>View details</button>
                         <button onClick={() => { setSelectedCreators(new Set([creatorId])); setShowAddToListModal(true); }} className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>+ List</button>
