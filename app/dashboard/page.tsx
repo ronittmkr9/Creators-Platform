@@ -426,7 +426,66 @@ function ActiveFilterPills({ filters, onRemove }: { filters: typeof DEFAULT_FILT
     </div>
   );
 }
+function StyledSelect({ value, onChange, children }: { value: string; onChange: (v: string) => void; children: JSX.Element | JSX.Element[] }) {
+  return (
+    <div className="relative">
+      <select value={value} onChange={e => onChange(e.target.value)}
+        className="w-full appearance-none px-3 py-2 pr-8 rounded-lg text-sm outline-none transition-colors"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}>
+        {children}
+      </select>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none"
+        style={{ color: "var(--text-secondary)" }}>
+        <polyline points="6 9 12 15 18 9" />
+      </svg>
+    </div>
+  );
+}
 
+function FilterSelect({ label, value, onChange, options, placeholder = "Any" }: {
+  label: string; value: string; onChange: (v: string) => void; options: string[]; placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label}</label>
+      <StyledSelect value={value} onChange={onChange}>
+        <option value="">{placeholder}</option>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </StyledSelect>
+    </div>
+  );
+}
+
+function TriToggle({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const options = [{ v: "", label: "Any" }, { v: "true", label: "Yes" }, { v: "false", label: "No" }];
+  return (
+    <div>
+      <label className="block text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label}</label>
+      <div className="inline-flex rounded-lg overflow-hidden" style={{ border: "1px solid var(--border)" }}>
+        {options.map((o, i) => (
+          <button key={o.v} type="button" onClick={() => onChange(o.v)}
+            className="px-3 py-1.5 text-xs font-medium transition-colors"
+            style={{
+              background: value === o.v ? "var(--accent)" : "var(--surface)",
+              color: value === o.v ? "white" : "var(--text-secondary)",
+              borderRight: i < options.length - 1 ? "1px solid var(--border)" : "none",
+            }}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FilterSectionLabel({ icon, children }: { icon: JSX.Element; children: string }) {
+  return (
+    <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider mb-2.5" style={{ color: "var(--text-secondary)" }}>
+      {icon}{children}
+    </p>
+  );
+}
 const DASHBOARD_STATE_KEY = "dashboard_state";
 
 function saveDashboardState(state: { rawQuery: string; filters: typeof DEFAULT_FILTERS; page: number }) {
@@ -912,6 +971,8 @@ export default function DashboardPage() {
       <style>{`
         @keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes filterIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-filterIn { animation: filterIn 0.15s ease; }
         .animate-spin { animation: spin 0.7s linear infinite; }
         select option { background: #1f2937; color: #f9fafb; }
         * { -webkit-user-select: none; user-select: none; }
@@ -1079,51 +1140,122 @@ export default function DashboardPage() {
             </div>
 
             {showFilters && (
-              <div className="mt-4 p-4 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Niche</label>
-                  <select value={filters.niche} onChange={e => setFilters(p => ({ ...p, niche: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All niches</option>{nicheOptions.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Country</label>
-                  <select value={filters.country} onChange={e => setFilters(p => ({ ...p, country: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All countries</option>{countryOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>State</label>
-                  <select value={filters.state} onChange={e => setFilters(p => ({ ...p, state: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All states</option>{stateOptions.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>City</label>
-                  <select value={filters.city} onChange={e => setFilters(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">All cities</option>{cityOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Type</label>
-                  <select value={filters.creatorType} onChange={e => setFilters(p => ({ ...p, creatorType: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any type</option>{creatorTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Gender</label>
-                  <select value={filters.gender} onChange={e => setFilters(p => ({ ...p, gender: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Age Group</label>
-                  <select value={filters.ageGroup} onChange={e => setFilters(p => ({ ...p, ageGroup: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option><option value="18-24">18–24</option><option value="25-34">25–34</option><option value="35-44">35–44</option><option value="45+">45+</option></select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Creator Size</label>
-                  <select value={filters.creatorSize} onChange={e => setFilters(p => ({ ...p, creatorSize: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option>{CREATOR_SIZES.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Collab Status</label>
-                  <select value={filters.collabStatus} onChange={e => setFilters(p => ({ ...p, collabStatus: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="">Any</option><option value="active">Active</option><option value="closed">Closed</option></select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Min Followers</label>
-                  <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))} placeholder="10000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} /></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Max Followers</label>
-                  <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))} placeholder="500000" className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} /></div>
-                {[{ label: "Has Email", key: "hasEmail" }, { label: "Has TikTok", key: "hasTiktok" }, { label: "Has YouTube", key: "hasYoutube" }].map(f => (
-                  <div key={f.key}><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{f.label}</label>
-                    <select value={filters[f.key as keyof typeof DEFAULT_FILTERS]} onChange={e => setFilters(p => ({ ...p, [f.key]: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                      <option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>
-                ))}
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Sort By</label>
-                  <select value={filters.sortBy} onChange={e => setFilters(p => ({ ...p, sortBy: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="followerCount">Followers</option><option value="lastUpdated">Last Updated</option></select></div>
-                <div><label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Order</label>
-                  <select value={filters.sortOrder} onChange={e => setFilters(p => ({ ...p, sortOrder: e.target.value }))} className="w-full px-3 py-1.5 rounded-lg text-sm outline-none" style={selectStyle}>
-                    <option value="desc">Descending</option><option value="asc">Ascending</option></select></div>
-                <div className="col-span-full flex justify-end">
-                  <button onClick={clearAllFilters} className="px-4 py-1.5 rounded-lg text-sm" style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Clear all filters</button>
+              <div className="mt-4 rounded-2xl overflow-hidden animate-filterIn" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+                <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: "1px solid var(--border)" }}>
+                  <div className="flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4" style={{ color: "var(--accent)" }}>
+                      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                    </svg>
+                    <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Filters</span>
+                    {activeFiltersCount > 0 && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
+                        {activeFiltersCount} active
+                      </span>
+                    )}
+                  </div>
+                  <button onClick={clearAllFilters} className="flex items-center gap-1.5 text-xs font-medium transition-colors" style={{ color: "var(--text-secondary)" }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z" /></svg>
+                    Clear all
+                  </button>
+                </div>
+
+                <div className="p-5 space-y-6">
+                  <div>
+                    <FilterSectionLabel icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1118 0z" /><circle cx="12" cy="10" r="3" /></svg>}>
+                      Location
+                    </FilterSectionLabel>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      <FilterSelect label="Country" value={filters.country} onChange={v => setFilters(p => ({ ...p, country: v }))} options={countryOptions} placeholder="All countries" />
+                      <FilterSelect label="State" value={filters.state} onChange={v => setFilters(p => ({ ...p, state: v }))} options={stateOptions} placeholder="All states" />
+                      <FilterSelect label="City" value={filters.city} onChange={v => setFilters(p => ({ ...p, city: v }))} options={cityOptions} placeholder="All cities" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <FilterSectionLabel icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>}>
+                      Audience
+                    </FilterSectionLabel>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>Gender</label>
+                        <StyledSelect value={filters.gender} onChange={v => setFilters(p => ({ ...p, gender: v }))}>
+                          <option value="">Any</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option>
+                        </StyledSelect>
+                      </div>
+                      <div>
+                        <label className="block text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>Age Group</label>
+                        <StyledSelect value={filters.ageGroup} onChange={v => setFilters(p => ({ ...p, ageGroup: v }))}>
+                          <option value="">Any</option><option value="18-24">18–24</option><option value="25-34">25–34</option><option value="35-44">35–44</option><option value="45+">45+</option>
+                        </StyledSelect>
+                      </div>
+                      <FilterSelect label="Creator Size" value={filters.creatorSize} onChange={v => setFilters(p => ({ ...p, creatorSize: v }))} options={CREATOR_SIZES} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <FilterSectionLabel icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><path d="M20.59 13.41L11 3.83A2 2 0 0 0 9.59 3H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.58a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.83z" /><circle cx="7" cy="7" r="1" /></svg>}>
+                      Content
+                    </FilterSectionLabel>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      <FilterSelect label="Niche" value={filters.niche} onChange={v => setFilters(p => ({ ...p, niche: v }))} options={nicheOptions} placeholder="All niches" />
+                      <FilterSelect label="Creator Type" value={filters.creatorType} onChange={v => setFilters(p => ({ ...p, creatorType: v }))} options={creatorTypeOptions} placeholder="Any type" />
+                      <div>
+                        <label className="block text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>Collab Status</label>
+                        <StyledSelect value={filters.collabStatus} onChange={v => setFilters(p => ({ ...p, collabStatus: v }))}>
+                          <option value="">Any</option><option value="active">Active</option><option value="closed">Closed</option>
+                        </StyledSelect>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-5" style={{ borderTop: "1px solid var(--border)" }}>
+                    <div>
+                      <FilterSectionLabel icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" /></svg>}>
+                        Follower Range
+                      </FilterSectionLabel>
+                      <div className="flex items-center gap-2">
+                        <input type="number" value={filters.followersMin} onChange={e => setFilters(p => ({ ...p, followersMin: e.target.value }))}
+                          placeholder="10000" className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
+                        <span className="text-xs flex-shrink-0" style={{ color: "var(--text-secondary)" }}>to</span>
+                        <input type="number" value={filters.followersMax} onChange={e => setFilters(p => ({ ...p, followersMax: e.target.value }))}
+                          placeholder="500000" className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
+                      </div>
+                    </div>
+                    <div>
+                      <FilterSectionLabel icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M22 6l-10 7L2 6" /></svg>}>
+                        Contact &amp; Channels
+                      </FilterSectionLabel>
+                      <div className="flex flex-wrap gap-4">
+                        <TriToggle label="Email" value={filters.hasEmail} onChange={v => setFilters(p => ({ ...p, hasEmail: v }))} />
+                        <TriToggle label="TikTok" value={filters.hasTiktok} onChange={v => setFilters(p => ({ ...p, hasTiktok: v }))} />
+                        <TriToggle label="YouTube" value={filters.hasYoutube} onChange={v => setFilters(p => ({ ...p, hasYoutube: v }))} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-end gap-2 pt-5" style={{ borderTop: "1px solid var(--border)" }}>
+                    <div className="w-40">
+                      <label className="block text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>Sort by</label>
+                      <StyledSelect value={filters.sortBy} onChange={v => setFilters(p => ({ ...p, sortBy: v }))}>
+                        <option value="followerCount">Followers</option>
+                        <option value="lastUpdated">Last Updated</option>
+                      </StyledSelect>
+                    </div>
+                    <button onClick={() => setFilters(p => ({ ...p, sortOrder: p.sortOrder === "desc" ? "asc" : "desc" }))} type="button"
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+                      title={filters.sortOrder === "desc" ? "Descending" : "Ascending"}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5"
+                        style={{ transform: filters.sortOrder === "asc" ? "scaleY(-1)" : "none" }}>
+                        <path d="M7 13l5 5 5-5M12 18V6" />
+                      </svg>
+                      {filters.sortOrder === "desc" ? "Desc" : "Asc"}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
