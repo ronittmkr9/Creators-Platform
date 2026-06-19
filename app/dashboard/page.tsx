@@ -17,7 +17,7 @@ interface Creator {
   addressCity: string | null;
   addressState: string | null;
   gender: string | null;
-  ageGroup: string | null;
+  age_group: string | null;
   creatorSize: string | null;
   creatorType: string | null;
   profilePicture: string | null;
@@ -65,7 +65,7 @@ const sizeColor: Record<string, string> = {
 };
 
 const DEFAULT_FILTERS = {
-  niche: "", gender: "", ageGroup: "", country: "", state: "", city: "",
+  niche: "", gender: "", age_group: "", country: "", state: "", city: "",
   creatorSize: "", creatorType: "", collabStatus: "",
   followersMin: "", followersMax: "",
   hasEmail: "", hasTiktok: "", hasYoutube: "",
@@ -76,10 +76,11 @@ interface Lexicons {
   niches: string[];
   countries: string[];
   cities: string[];
+  age_group: string[];
   states: string[];
   creatorTypes: string[];
 }
-const EMPTY_LEXICONS: Lexicons = { niches: [], countries: [], cities: [], states: [], creatorTypes: [] };
+const EMPTY_LEXICONS: Lexicons = { niches: [], countries: [], cities: [], age_group: [], states: [], creatorTypes: [] };
 
 // TTL for creator search results — after this, a background revalidation fires
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -100,7 +101,7 @@ function buildCacheKey(q: string, p: number, f: typeof DEFAULT_FILTERS): { key: 
   if (q) params.set("q", q);
   if (f.niche) params.set("niche", f.niche);
   if (f.gender) params.set("gender", f.gender);
-  if (f.ageGroup) params.set("ageGroup", f.ageGroup);
+  if (f.age_group) params.set("ageGroup", f.age_group);
   if (f.country) params.set("country", f.country);
   if (f.state) params.set("state", f.state);
   if (f.city) params.set("city", f.city);
@@ -275,14 +276,14 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
         if (tok.endsWith("+")) { const n = parseInt(tok); if (!isNaN(n)) { nums.push(n, 70); consumedHere.push(j); } break; }
         break;
       }
-      if (nums.length >= 2) { const g = ageRangeToGroup(Math.min(nums[0], nums[1]), Math.max(nums[0], nums[1])); if (g) extracted.ageGroup = g; consumedHere.forEach(idx => consumed.add(idx)); }
-      else if (nums.length === 1) { const g = ageRangeToGroup(nums[0], nums[0]); if (g) extracted.ageGroup = g; consumedHere.forEach(idx => consumed.add(idx)); }
+      if (nums.length >= 2) { const g = ageRangeToGroup(Math.min(nums[0], nums[1]), Math.max(nums[0], nums[1])); if (g) extracted.age_group = g; consumedHere.forEach(idx => consumed.add(idx)); }
+      else if (nums.length === 1) { const g = ageRangeToGroup(nums[0], nums[0]); if (g) extracted.age_group = g; consumedHere.forEach(idx => consumed.add(idx)); }
     }
   }
   for (let i = 0; i < tokens.length; i++) {
-    if (consumed.has(i) || extracted.ageGroup) continue;
+    if (consumed.has(i) || extracted.age_group) continue;
     const m = tokens[i].match(/^(\d{1,2})-(\d{1,2})$/);
-    if (m) { const lo = parseInt(m[1]); const hi = parseInt(m[2]); const g = ageRangeToGroup(Math.min(lo, hi), Math.max(lo, hi)); if (g) { extracted.ageGroup = g; consumed.add(i); } }
+    if (m) { const lo = parseInt(m[1]); const hi = parseInt(m[2]); const g = ageRangeToGroup(Math.min(lo, hi), Math.max(lo, hi)); if (g) { extracted.age_group = g; consumed.add(i); } }
   }
 
   const genderMap: Record<string, string> = { female: "female", women: "female", woman: "female", girl: "female", girls: "female", male: "male", men: "male", man: "male", boy: "male", boys: "male" };
@@ -547,7 +548,7 @@ function AddToListModal({
 }
 
 const FILTER_LABELS: Record<string, string> = {
-  niche: "Niche", gender: "Gender", ageGroup: "Age", country: "Country", state: "State", city: "City",
+  niche: "Niche", gender: "Gender", age_group: "Age", country: "Country", state: "State", city: "City",
   creatorSize: "Size", creatorType: "Type", collabStatus: "Status",
   followersMin: "Min Followers", followersMax: "Max Followers",
   hasEmail: "Has Email", hasTiktok: "Has TikTok", hasYoutube: "Has YouTube",
@@ -672,7 +673,7 @@ export default function DashboardPage() {
   const [cityOptions, setCityOptions] = useState<string[]>([]);
   const [stateOptions, setStateOptions] = useState<string[]>([]);
   const [creatorTypeOptions, setCreatorTypeOptions] = useState<string[]>([]);
-
+  const [ageGroupOptions, setAgeGroupOptions] = useState<string[]>([]);
   const cleanQueryRef = useRef("");
   const lexiconsRef = useRef<Lexicons>(EMPTY_LEXICONS);
   const requestId = useRef(0);
@@ -710,8 +711,8 @@ export default function DashboardPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    lexiconsRef.current = { niches: nicheOptions, countries: countryOptions, cities: cityOptions, states: stateOptions, creatorTypes: creatorTypeOptions };
-  }, [nicheOptions, countryOptions, cityOptions, stateOptions, creatorTypeOptions]);
+    lexiconsRef.current = { niches: nicheOptions, countries: countryOptions, cities: cityOptions, age_group: ageGroupOptions, states: stateOptions, creatorTypes: creatorTypeOptions };
+  }, [nicheOptions, countryOptions, cityOptions, ageGroupOptions, stateOptions, creatorTypeOptions]);
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -752,6 +753,7 @@ export default function DashboardPage() {
         setNicheOptions((d.primaryniches || []).filter(Boolean).sort());
         setCountryOptions((d.countries || []).filter(Boolean).sort());
         setCityOptions((d.cities || []).filter(Boolean).sort());
+        setAgeGroupOptions((d.age_group || []).filter(Boolean).sort());
         setStateOptions((d.states || []).filter(Boolean).sort());
         setCreatorTypeOptions((d.creatorTypes || []).filter(Boolean).sort());
       }).catch(err => {
@@ -1329,10 +1331,7 @@ export default function DashboardPage() {
                         </StyledSelect>
                       </div>
                       <div>
-                        <label className="block text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>Age Group</label>
-                        <StyledSelect value={filters.ageGroup} onChange={v => setFilters(p => ({ ...p, ageGroup: v }))}>
-                          <option value="">Any</option><option value="18-24">18–24</option><option value="25-34">25–34</option><option value="35-44">35–44</option><option value="45+">45+</option>
-                        </StyledSelect>
+                        <FilterSelect label="Age Group" value={filters.age_group} onChange={v => setFilters(p => ({ ...p, age_group: v }))} options={ageGroupOptions} placeholder="All age groups" />
                       </div>
                       <FilterSelect label="Creator Size" value={filters.creatorSize} onChange={v => setFilters(p => ({ ...p, creatorSize: v }))} options={CREATOR_SIZES} />
                     </div>
@@ -1522,10 +1521,28 @@ export default function DashboardPage() {
 
                       {/* Social + status badges */}
                       <div className="flex gap-1.5 mb-3">
-                        {c.primarySocialLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>IG</span>}
-                        {c.tiktokLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>TT</span>}
-                        {c.youtubeLink && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>YT</span>}
-                        {c.email && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>✉</span>}
+                        {c.primarySocialLink && <a href={c.primarySocialLink} target="_blank" rel="noopener noreferrer" className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>IG</a>}
+                        {c.tiktokLink && <a href={c.tiktokLink} target="_blank" rel="noopener noreferrer" className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>TT</a>}
+                        {c.youtubeLink && <a href={c.youtubeLink} target="_blank" rel="noopener noreferrer" className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>YT</a>}
+                        {c.email && (
+  <button
+    onClick={async (e) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(c.email!);
+        toast.success(`Copied ${c.email}`);
+      } catch {
+        toast.error("Couldn't copy email");
+      }
+      window.open("https://mail.google.com/mail/u/0/#inbox?compose=new", "_blank", "noopener,noreferrer");
+    }}
+    className="text-xs px-1.5 py-0.5 rounded"
+    style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
+    title={c.email}
+  >
+    ✉
+  </button>
+)}
                         {c.collaborationStatus && (
                           <span className="text-xs px-1.5 py-0.5 rounded ml-auto capitalize" style={{
                             background: ["open", "active"].includes(c.collaborationStatus.toLowerCase()) ? "rgba(34,197,94,0.15)" : "var(--surface-2)",

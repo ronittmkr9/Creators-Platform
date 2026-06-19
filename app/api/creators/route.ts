@@ -57,6 +57,9 @@ function getCacheKey(params: URLSearchParams): string {
  * extracted by the client (niche, location, follower range, etc.) are sent
  * as separate params and applied as precise, indexed-friendly conditions
  * rather than fuzzy text matches.
+ *
+ * age_group is a plain scalar text column (see schema.prisma), so a normal
+ * ILIKE works here the same as every other text column below.
  */
 function buildKeywordConditions(
   q: string,
@@ -81,27 +84,27 @@ function buildKeywordConditions(
   for (const kw of keywords) {
     blocks.push(`(
       username              ILIKE $${i} OR
-      full_name             ILIKE $${i} OR
-      first_name            ILIKE $${i} OR
-      last_name             ILIKE $${i} OR
-      niche_primary         ILIKE $${i} OR
-      niche_secondary       ILIKE $${i} OR
-      bio_data              ILIKE $${i} OR
-      address_country       ILIKE $${i} OR
-      address_state         ILIKE $${i} OR
-      address_city          ILIKE $${i} OR
-      combined_hashtags     ILIKE $${i} OR
-      combined_mentions     ILIKE $${i} OR
-      hashtags_last_90_days ILIKE $${i} OR
-      mentions_last_90_days ILIKE $${i} OR
-      business_category     ILIKE $${i} OR
-      creator_type          ILIKE $${i} OR
-      collaboration_status  ILIKE $${i} OR
-      gender                ILIKE $${i} OR
-      age_group             ILIKE $${i} OR
-      creator_size          ILIKE $${i} OR
-      top_collaboration     ILIKE $${i} OR
-      email                 ILIKE $${i}
+      full_name              ILIKE $${i} OR
+      first_name             ILIKE $${i} OR
+      last_name              ILIKE $${i} OR
+      niche_primary          ILIKE $${i} OR
+      niche_secondary        ILIKE $${i} OR
+      bio_data               ILIKE $${i} OR
+      address_country        ILIKE $${i} OR
+      address_state          ILIKE $${i} OR
+      address_city           ILIKE $${i} OR
+      combined_hashtags      ILIKE $${i} OR
+      combined_mentions      ILIKE $${i} OR
+      hashtags_last_90_days  ILIKE $${i} OR
+      mentions_last_90_days  ILIKE $${i} OR
+      business_category      ILIKE $${i} OR
+      creator_type           ILIKE $${i} OR
+      collaboration_status   ILIKE $${i} OR
+      gender                 ILIKE $${i} OR
+      age_group              ILIKE $${i} OR
+      creator_size           ILIKE $${i} OR
+      top_collaboration      ILIKE $${i} OR
+      email                  ILIKE $${i}
     )`);
     values.push(`%${kw}%`);
     i++;
@@ -153,6 +156,7 @@ export async function GET(req: NextRequest) {
   if (fullName)     { conditions.push(`full_name ILIKE $${i}`);                                       values.push(`%${fullName}%`);    i++; }
   if (niche)        { conditions.push(`(niche_primary ILIKE $${i} OR niche_secondary ILIKE $${i})`); values.push(`%${niche}%`);       i++; }
   if (gender)       { conditions.push(`gender ILIKE $${i}`);                                          values.push(gender);             i++; }
+  // age_group is a plain scalar text column — exact match is correct here.
   if (ageGroup)     { conditions.push(`age_group = $${i}`);                                           values.push(ageGroup);           i++; }
   if (country)      { conditions.push(`address_country ILIKE $${i}`);                                 values.push(`%${country}%`);     i++; }
   if (state)        { conditions.push(`address_state ILIKE $${i}`);                                   values.push(`%${state}%`);       stateParamIndex = i; i++; }
