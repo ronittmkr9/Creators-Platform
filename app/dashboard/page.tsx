@@ -122,7 +122,9 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
 
   function matchPhraseAt(start: number, candidates: string[]): { value: string; len: number } | null {
     for (let len = Math.min(4, tokens.length - start); len >= 1; len--) {
-      for (let j = 0; j < len; j++) if (consumed.has(start + j)) return null;
+      let blocked = false;
+      for (let j = 0; j < len; j++) if (consumed.has(start + j)) { blocked = true; break; }
+      if (blocked) continue;
       const phrase = tokens.slice(start, start + len).join(" ");
       const match = candidates.find(c => c.toLowerCase() === phrase);
       if (match) return { value: match, len };
@@ -137,6 +139,9 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
       const m = matchPhraseAt(i, candidates);
       if (m) {
         for (let j = 0; j < m.len; j++) consumed.add(i + j);
+        // Swallow a bare "in" immediately before a matched location/value
+        // ("creators in Germany") so it doesn't leak into free-text search.
+        if (i > 0 && tokens[i - 1] === "in" && !consumed.has(i - 1)) consumed.add(i - 1);
         return m.value;
       }
     }
@@ -165,18 +170,92 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     if ((t === "followers" || t === "follower") && i > 0 && !consumed.has(i - 1)) consumed.add(i);
   }
 
-  function ageRangeToGroup(lo: number, hi: number): string | null {
-    if (lo <= 18 && hi <= 24) return "18-24";
-    if (lo >= 25 && hi <= 34) return "25-34";
-    if (lo >= 35 && hi <= 44) return "35-44";
-    if (lo >= 45) return "45+";
-    if (lo >= 18 && hi <= 30) return "18-24";
-    if (lo >= 20 && hi <= 35) return "25-34";
-    if (lo >= 14 && hi <= 70) {
-      if (lo <= 24 && hi <= 27) return "18-24";
-      if (lo >= 25 && hi <= 36) return "25-34";
-      if (lo >= 35 && hi <= 46) return "35-44";
+  // Comparative follower phrases — covers plain-English ranges on top of the
+  // symbol syntax above ("50k+", "<10k", "50k-100k"): "more than 50k followers",
+  // "at least 10k", "under 5k", "fewer than 100k", "up to 200k", "over 1m", "below 50k".
+  const minComparativePhrases: string[][] = [
+    ["more", "than"], ["greater", "than"], ["at", "least"], ["minimum", "of"],
+    ["above"], ["over"], ["min"],
+  ];
+  const maxComparativePhrases: string[][] = [
+    ["less", "than"], ["fewer", "than"], ["at", "most"], ["maximum", "of"],
+    ["up", "to"], ["under"], ["below"], ["max"],
+  ];
+
+  function tryComparativeFollowers(phrases: string[][], target: "followersMin" | "followersMax"): boolean {
+    for (const phrase of phrases) {
+      for (let i = 0; i <= tokens.length - phrase.length; i++) {
+        let ok = true;
+        for (let k = 0; k < phrase.length; k++) {
+          if (consumed.has(i + k) || tokens[i + k] !== phrase[k]) { ok = false; break; }
+        }
+        if (!ok) continue;
+        const j = i + phrase.length;
+        if (j >= tokens.length || consumed.has(j)) continue;
+        const v = parseFollowerVal(tokens[j].replace(/,/g, ""));
+        if (v === null) continue;
+        for (let k = 0; k < phrase.length; k++) consumed.add(i + k);
+        consumed.add(j);
+        if (tokens[j + 1] === "followers" || tokens[j + 1] === "follower") consumed.add(j + 1);
+        extracted[target] = String(v);
+        return true;
+      }
     }
+    return false;
+  }
+  if (!extracted.followersMin) tryComparativeFollowers(minComparativePhrases, "followersMin");
+  if (!extracted.followersMax) tryComparativeFollowers(maxComparativePhrases, "followersMax");
+
+  // "between X and Y followers" — only treated as a follower range (not an
+  // age range) when a follower word follows, or either number uses a k/m
+  // scale suffix, to avoid colliding with "age between 20-30".
+  if (!extracted.followersMin && !extracted.followersMax) {
+    for (let i = 0; i < tokens.length; i++) {
+      if (consumed.has(i) || tokens[i] !== "between") continue;
+      const j = i + 1;
+      if (j >= tokens.length || consumed.has(j)) continue;
+      const v1 = parseFollowerVal(tokens[j].replace(/,/g, ""));
+      if (v1 === null) continue;
+      let k = j + 1;
+      const hasConnector = ["and", "to", "-"].includes(tokens[k]) && !consumed.has(k);
+      if (hasConnector) k++;
+      if (k >= tokens.length || consumed.has(k)) continue;
+      const v2 = parseFollowerVal(tokens[k].replace(/,/g, ""));
+      if (v2 === null) continue;
+      const end = k + 1;
+      const hasFollowerWord = tokens[end] === "followers" || tokens[end] === "follower";
+      const hasScale = /[km]$/.test(tokens[j]) || /[km]$/.test(tokens[k]);
+      if (!hasFollowerWord && !hasScale) continue;
+      extracted.followersMin = String(Math.min(v1, v2));
+      extracted.followersMax = String(Math.max(v1, v2));
+      consumed.add(i); consumed.add(j);
+      if (hasConnector) consumed.add(j + 1);
+      consumed.add(k);
+      if (hasFollowerWord) consumed.add(end);
+      break;
+    }
+  }
+
+  function ageRangeToGroup(lo: number, hi: number): string | null {
+    if (lo > hi) { const t = lo; lo = hi; hi = t; }
+    // Pick the predefined bucket with the greatest overlap with [lo, hi],
+    // so a range straddling two buckets (e.g. 20-30) resolves to whichever
+    // bucket it mostly falls into, rather than always rounding down.
+    const buckets: [string, number, number][] = [
+      ["18-24", 18, 24],
+      ["25-34", 25, 34],
+      ["35-44", 35, 44],
+      ["45+", 45, 120],
+    ];
+    let best: string | null = null;
+    let bestOverlap = 0;
+    for (const [name, bLo, bHi] of buckets) {
+      const overlap = Math.min(hi, bHi) - Math.max(lo, bLo);
+      if (overlap > bestOverlap) { bestOverlap = overlap; best = name; }
+    }
+    if (best) return best;
+    if (hi < 18) return "18-24";
+    if (lo >= 45) return "45+";
     return null;
   }
 
@@ -214,8 +293,8 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
 
   for (let i = 0; i < tokens.length; i++) {
     if (consumed.has(i)) continue;
-    if (tokens[i] === "Active") { extracted.collabStatus = "active"; consumed.add(i); break; }
-    if (tokens[i] === "Closed") { extracted.collabStatus = "closed"; consumed.add(i); break; }
+    if (tokens[i] === "active" || tokens[i] === "open") { extracted.collabStatus = "active"; consumed.add(i); break; }
+    if (tokens[i] === "closed") { extracted.collabStatus = "closed"; consumed.add(i); break; }
   }
 
   for (let i = 0; i < tokens.length - 1; i++) {
@@ -224,19 +303,69 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
   }
 
   const fieldPrefixes: Record<string, keyof typeof extracted> = { country: "country", state: "state", city: "city", niche: "niche", type: "creatorType" };
+  const fieldStopTokens = new Set(["and", "with", "who", "has", "have", "for", "between", "based", "located", "near", "but", "or"]);
   for (let i = 0; i < tokens.length - 1; i++) {
     if (consumed.has(i)) continue;
     const key = tokens[i].replace(":", "");
-    if (fieldPrefixes[key] && tokens[i + 1]) {
-      consumed.add(i);
+    if (fieldPrefixes[key] && tokens[i + 1] && !consumed.has(i + 1)) {
       const valTokens: string[] = []; let j = i + 1;
       while (j < tokens.length && !consumed.has(j) && valTokens.length < 3) {
-        valTokens.push(tokens[j].replace(":", "")); consumed.add(j); j++;
-        if (fieldPrefixes[tokens[j]]) break;
+        const stripped = tokens[j].replace(":", "");
+        if (fieldPrefixes[stripped] || fieldStopTokens.has(stripped)) break;
+        valTokens.push(stripped); j++;
       }
-      const val = valTokens.join(" "); if (val) (extracted as Record<string, string>)[fieldPrefixes[key]] = val;
+      const val = valTokens.join(" ");
+      const target = fieldPrefixes[key];
+      if (val && !extracted[target]) {
+        consumed.add(i);
+        for (let k = i + 1; k < j; k++) consumed.add(k);
+        (extracted as Record<string, string>)[target] = val;
+      }
     }
   }
+
+  // Demonyms / nationality adjectives — "German creators", "Indian influencers",
+  // "South African" — map onto the country lexicon since the raw word won't
+  // appear in address_country values verbatim.
+  const demonyms: Record<string, string> = {
+    american: "United States", usa: "United States",
+    british: "United Kingdom", english: "United Kingdom", uk: "United Kingdom", scottish: "United Kingdom", welsh: "United Kingdom",
+    german: "Germany", french: "France", italian: "Italy", spanish: "Spain",
+    dutch: "Netherlands", swedish: "Sweden", norwegian: "Norway", danish: "Denmark",
+    finnish: "Finland", polish: "Poland", irish: "Ireland", portuguese: "Portugal",
+    greek: "Greece", swiss: "Switzerland", belgian: "Belgium", austrian: "Austria",
+    ukrainian: "Ukraine", russian: "Russia", turkish: "Turkey", israeli: "Israel",
+    egyptian: "Egypt", "south african": "South Africa", nigerian: "Nigeria",
+    kenyan: "Kenya", moroccan: "Morocco",
+    indian: "India", pakistani: "Pakistan", bangladeshi: "Bangladesh", nepali: "Nepal",
+    "sri lankan": "Sri Lanka", chinese: "China", japanese: "Japan", korean: "South Korea",
+    filipino: "Philippines", indonesian: "Indonesia", thai: "Thailand", vietnamese: "Vietnam",
+    malaysian: "Malaysia", singaporean: "Singapore",
+    canadian: "Canada", mexican: "Mexico", brazilian: "Brazil",
+    argentine: "Argentina", argentinian: "Argentina", chilean: "Chile",
+    colombian: "Colombia", peruvian: "Peru",
+    australian: "Australia", "new zealand": "New Zealand", kiwi: "New Zealand",
+    saudi: "Saudi Arabia", emirati: "United Arab Emirates", qatari: "Qatar",
+  };
+  function findDemonymCountry(): string | null {
+    for (let i = 0; i < tokens.length; i++) {
+      if (consumed.has(i)) continue;
+      for (let len = 2; len >= 1; len--) {
+        if (i + len > tokens.length) continue;
+        let ok = true;
+        for (let k = 0; k < len; k++) if (consumed.has(i + k)) { ok = false; break; }
+        if (!ok) continue;
+        const mapped = demonyms[tokens.slice(i, i + len).join(" ")];
+        if (!mapped) continue;
+        for (let k = 0; k < len; k++) consumed.add(i + k);
+        if (i > 0 && tokens[i - 1] === "in" && !consumed.has(i - 1)) consumed.add(i - 1);
+        const lexMatch = lexicons.countries.find(c => c.toLowerCase() === mapped.toLowerCase());
+        return lexMatch || mapped;
+      }
+    }
+    return null;
+  }
+  if (!extracted.country) { const d = findDemonymCountry(); if (d) extracted.country = d; }
 
   if (!extracted.country) { const m = findAndConsumeLexiconMatch(lexicons.countries); if (m) extracted.country = m; }
   if (!extracted.state)   { const m = findAndConsumeLexiconMatch(lexicons.states);    if (m) extracted.state = m; }
@@ -248,6 +377,21 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
       if ((tokens[i] === "primary" || tokens[i] === "secondary") && tokens[i + 1] === "niche") {
         consumed.add(i); consumed.add(i + 1);
         const m = findAndConsumeLexiconMatch(lexicons.niches); if (m) extracted.niche = m; break;
+      }
+    }
+    // Reversed natural phrasing: "<value> niche" / "<value> niches", e.g. "food niche".
+    if (!extracted.niche) {
+      for (let i = 0; i < tokens.length - 1; i++) {
+        if (consumed.has(i)) continue;
+        const m = matchPhraseAt(i, lexicons.niches);
+        if (!m) continue;
+        const nicheWordIdx = i + m.len;
+        if (tokens[nicheWordIdx] === "niche" || tokens[nicheWordIdx] === "niches") {
+          for (let k = 0; k < m.len; k++) consumed.add(i + k);
+          consumed.add(nicheWordIdx);
+          extracted.niche = m.value;
+          break;
+        }
       }
     }
     if (!extracted.niche) { const m = findAndConsumeLexiconMatch(lexicons.niches); if (m) extracted.niche = m; }
@@ -267,7 +411,7 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     }
   }
 
-  const stopWords = new Set(["creators", "creator", "influencer", "influencers", "with", "and", "the", "in", "from", "a", "an", "of", "for", "between", "has", "have", "is", "are", "who", "located", "based", "to"]);
+  const stopWords = new Set(["creators", "creator", "influencer", "influencers", "with", "and", "the", "in", "from", "a", "an", "of", "for", "between", "has", "have", "is", "are", "who", "located", "based", "to", "niche", "niches", "but", "or"]);
   for (let i = 0; i < tokens.length; i++) { if (stopWords.has(tokens[i])) consumed.add(i); }
 
   const cleanQuery = tokens.filter((_, i) => !consumed.has(i)).join(" ").trim();
