@@ -31,6 +31,7 @@ const searchSchema = z.object({
   hasEmail:     z.enum(["true", "false"]).optional(),
   hasTiktok:    z.enum(["true", "false"]).optional(),
   hasYoutube:   z.enum(["true", "false"]).optional(),
+  hashtag:      z.string().optional(),
   page:         z.coerce.number().min(1).default(1),
   pageSize:     z.coerce.number().min(1).max(100).default(50),
   sortBy:       z.enum(["followerCount", "lastUpdated"]).default("followerCount"),
@@ -82,6 +83,8 @@ function buildKeywordConditions(
   const blocks: string[] = [];
 
   for (const kw of keywords) {
+    // Strip leading # so '#fitness' matches both 'fitness' and '#fitness' stored in DB
+    const term = kw.startsWith("#") ? kw.slice(1) : kw;
     blocks.push(`(
       username              ILIKE $${i} OR
       full_name              ILIKE $${i} OR
@@ -106,7 +109,7 @@ function buildKeywordConditions(
       top_collaboration      ILIKE $${i} OR
       email                  ILIKE $${i}
     )`);
-    values.push(`%${kw}%`);
+    values.push(`%${term}%`);
     i++;
   }
 
@@ -133,6 +136,7 @@ export async function GET(req: NextRequest) {
     q, username, fullName, niche, gender, ageGroup,
     country, state, city, creatorSize, creatorType, collabStatus,
     followersMin, followersMax, hasEmail, hasTiktok, hasYoutube,
+    hashtag,
     page, pageSize, sortBy, sortOrder,
   } = parsed.data;
 
@@ -186,6 +190,17 @@ export async function GET(req: NextRequest) {
   if (hasTiktok  === "false") conditions.push(`tiktok_link IS NULL`);
   if (hasYoutube === "true")  conditions.push(`youtube_link IS NOT NULL`);
   if (hasYoutube === "false") conditions.push(`youtube_link IS NULL`);
+  if (hashtag) {
+    // Search only hashtag/bio/niche fields (targeted — skips unrelated columns)
+    const tags = hashtag.split("|").map(t => t.trim().replace(/^#/, "")).filter(Boolean);
+    const tagClauses = tags.map(t => {
+      const clause = `(combined_hashtags ILIKE $${i} OR hashtags_last_90_days ILIKE $${i} OR bio_data ILIKE $${i} OR combined_mentions ILIKE $${i} OR niche_primary ILIKE $${i} OR niche_secondary ILIKE $${i})`;
+      values.push(`%${t}%`); i++;
+      return clause;
+    });
+    if (tagClauses.length === 1) conditions.push(tagClauses[0]);
+    else if (tagClauses.length > 1) conditions.push(`(${tagClauses.join(" OR ")})`);
+  }
 
   // ── Location ranking
   // If a city was requested, exact-city matches should rank first, with

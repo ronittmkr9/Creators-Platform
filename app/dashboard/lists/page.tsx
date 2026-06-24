@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { cachedFetch, invalidateCache } from "@/lib/client-cache";
 import toast, { Toaster } from "react-hot-toast";
 import Link from "next/link";
+import Sidebar from "@/components/Sidebar";
 
 interface Creator {
   pk: string;
@@ -27,6 +28,135 @@ interface ListItem { id: string; creatorId: string; addedAt: string; creator: Cr
 interface SavedList { id: string; name: string; items: ListItem[]; }
 interface SavedListSummary { id: string; name: string; _count: { items: number }; }
 interface ConfirmDialog { title: string; body: string; onConfirm: () => void; confirmLabel?: string; danger?: boolean; }
+
+const EXPORT_COLUMNS = [
+  { key: "username",            label: "Username" },
+  { key: "fullName",            label: "Full Name" },
+  { key: "email",               label: "Email" },
+  { key: "phone",               label: "Phone" },
+  { key: "nichePrimary",        label: "Niche" },
+  { key: "nicheSecondary",      label: "Secondary Niche" },
+  { key: "followerCount",       label: "Followers" },
+  { key: "creatorSize",         label: "Creator Size" },
+  { key: "gender",              label: "Gender" },
+  { key: "ageGroup",            label: "Age Group" },
+  { key: "addressCountry",      label: "Country" },
+  { key: "addressCity",         label: "City" },
+  { key: "addressState",        label: "State" },
+  { key: "primarySocialLink",   label: "Instagram" },
+  { key: "tiktokLink",          label: "TikTok" },
+  { key: "youtubeLink",         label: "YouTube" },
+  { key: "collaborationStatus", label: "Collab Status" },
+  { key: "businessCategory",    label: "Business Category" },
+  { key: "priceUsd",            label: "Price (USD)" },
+];
+
+function ExportModal({
+  onClose,
+  onExport,
+  exporting,
+}: {
+  onClose: () => void;
+  onExport: (cols: string[]) => void;
+  exporting: boolean;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set(EXPORT_COLUMNS.map(c => c.key)));
+
+  function toggle(key: string) {
+    setSelected(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  }
+  const allChecked = selected.size === EXPORT_COLUMNS.length;
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.7)" }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-2xl shadow-2xl w-[480px] max-h-[90vh] flex flex-col"
+        style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "var(--border)" }}>
+          <div>
+            <h3 className="font-semibold text-base" style={{ color: "var(--text-primary)" }}>Export CSV</h3>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-secondary)" }}>Choose which columns to include</p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg" style={{ color: "var(--text-secondary)" }}
+            onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        {/* Select all / none */}
+        <div className="flex items-center gap-3 px-6 pt-4 pb-2">
+          <button
+            onClick={() => setSelected(allChecked ? new Set() : new Set(EXPORT_COLUMNS.map(c => c.key)))}
+            className="text-xs font-medium px-2.5 py-1 rounded-lg"
+            style={{ background: "var(--surface-2)", color: "var(--accent)", border: "1px solid var(--border)" }}
+          >
+            {allChecked ? "Deselect all" : "Select all"}
+          </button>
+          <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{selected.size} of {EXPORT_COLUMNS.length} columns</span>
+        </div>
+
+        {/* Column grid */}
+        <div className="px-6 pb-4 overflow-y-auto flex-1">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+            {EXPORT_COLUMNS.map(col => {
+              const checked = selected.has(col.key);
+              return (
+                <label
+                  key={col.key}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl cursor-pointer select-none"
+                  style={{ background: checked ? "rgba(99,102,241,0.08)" : "transparent", transition: "background 0.1s" }}
+                  onMouseEnter={e => { if (!checked) (e.currentTarget as HTMLLabelElement).style.background = "var(--surface-2)"; }}
+                  onMouseLeave={e => { if (!checked) (e.currentTarget as HTMLLabelElement).style.background = "transparent"; }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggle(col.key)}
+                    className="w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors"
+                    style={{ borderColor: checked ? "var(--accent)" : "var(--border)", background: checked ? "var(--accent)" : "transparent" }}
+                  >
+                    {checked && <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" className="w-2.5 h-2.5"><polyline points="20 6 9 17 4 12"/></svg>}
+                  </button>
+                  <span className="text-sm" style={{ color: checked ? "var(--text-primary)" : "var(--text-secondary)" }}>{col.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t" style={{ borderColor: "var(--border)" }}>
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-medium"
+            style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+            onMouseEnter={e => (e.currentTarget.style.color = "var(--text-primary)")}
+            onMouseLeave={e => (e.currentTarget.style.color = "var(--text-secondary)")}>
+            Cancel
+          </button>
+          <button
+            onClick={() => onExport([...selected])}
+            disabled={exporting || selected.size === 0}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-40"
+            style={{ background: "var(--accent)", color: "white" }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.88"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
+          >
+            {exporting
+              ? <><svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>Exporting…</>
+              : <><svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export {selected.size} column{selected.size !== 1 ? "s" : ""}</>
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function fmtNum(n: string | null): string {
   if (!n) return "—";
@@ -108,11 +238,9 @@ function ListPageInner() {
   const [savingName, setSavingName] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [deletingList, setDeletingList] = useState(false);
-  const [newListName, setNewListName] = useState("");
-  const [creatingList, setCreatingList] = useState(false);
-
   // Multi-select state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkRemoving, setBulkRemoving] = useState(false);
@@ -147,13 +275,12 @@ function ListPageInner() {
 
   async function fetchAllLists() {
     try {
-      const data = await cachedFetch("lists", () =>
-        fetch("/api/lists").then(r => r.ok ? r.json() : { lists: [] })
-      );
+      invalidateCache("lists");
+      const data = await fetch("/api/lists").then(r => r.ok ? r.json() : { lists: [] });
       setAllLists(data.lists || []);
+      window.dispatchEvent(new CustomEvent("lists:updated"));
     } catch (error) {
       console.error("Error fetching lists:", error);
-      // non-critical, sidebar just stays empty
     }
   }
 
@@ -170,50 +297,6 @@ function ListPageInner() {
 
   function openList(id: string) {
     router.push(`/dashboard/lists?id=${id}`);
-  }
-
-  async function createList() {
-    if (!newListName.trim() || creatingList) return;
-    const trimmed = newListName.trim();
-    
-    // Check for duplicate list names (case-insensitive)
-    const duplicate = allLists.some(l => l.name.toLowerCase() === trimmed.toLowerCase());
-    if (duplicate) { 
-      toast.error(`A list named "${trimmed}" already exists`); 
-      return; 
-    }
-    
-    setCreatingList(true);
-    const toastId = toast.loading("Creating list...");
-    
-    try {
-      const res = await fetch("/api/lists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
-      
-      if (!res.ok) {
-        // Check if the API returned a duplicate error
-        const errorData = await res.json().catch(() => ({}));
-        if (errorData.error && errorData.error.toLowerCase().includes("already exists")) {
-          toast.error(`A list named "${trimmed}" already exists`, { id: toastId });
-          setCreatingList(false);
-          return;
-        }
-        throw new Error("Failed to create list");
-      }
-      
-      setNewListName("");
-      invalidateCache("lists");
-      await fetchAllLists();
-      toast.success("List created successfully", { id: toastId });
-    } catch (error) {
-      console.error("Error creating list:", error);
-      toast.error("Failed to create list", { id: toastId });
-    } finally {
-      setCreatingList(false);
-    }
   }
 
   function saveRename() {
@@ -387,12 +470,14 @@ function ListPageInner() {
     });
   }
 
-  async function exportCSV() {
+  async function exportCSV(selectedCols: string[]) {
     if (!listId) return;
     setExporting(true);
+    setShowExportModal(false);
     const toastId = toast.loading("Exporting...");
     try {
-      const res = await fetch(`/api/lists/${listId}/export`);
+      const colsParam = selectedCols.length > 0 ? `?columns=${selectedCols.join(",")}` : "";
+      const res = await fetch(`/api/lists/${listId}/export${colsParam}`);
       if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -459,108 +544,7 @@ function ListPageInner() {
         .btn-ghost-hover:hover { background: var(--surface-2) !important; color: var(--text-primary) !important; }
         .btn-danger-hover:hover { background: rgba(239,68,68,0.08) !important; color: #ef4444 !important; }
       `}</style>
-
-      {/* ── Sidebar ── */}
-      <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-        <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "var(--accent)" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-4 h-4">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-            </div>
-            <span className="font-semibold text-sm truncate">CreatorDiscover</span>
-          </div>
-        </div>
-
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {/* Search nav item */}
-          <Link
-            href="/dashboard"
-            className="flex items-center gap-3 px-3 py-2 rounded-xl text-sm nav-item-hover"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0">
-              <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-            </svg>
-            Search
-          </Link>
-
-          {/* Saved Lists — always expanded on this page */}
-          <div>
-            <div
-              className="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium"
-              style={{ color: "var(--accent)", background: "rgba(99,102,241,0.1)" }}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0">
-                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-              </svg>
-              Saved Lists
-              {allLists.length > 0 && (
-                <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
-                  {allLists.length}
-                </span>
-              )}
-            </div>
-
-            <div className="mt-1 ml-3 space-y-0.5">
-              {allLists.map(l => (
-                <button
-                  key={l.id}
-                  onClick={() => openList(l.id)}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-left"
-                  style={{
-                    color: l.id === listId ? "var(--accent)" : "var(--text-secondary)",
-                    background: l.id === listId ? "rgba(99,102,241,0.1)" : "transparent",
-                    fontWeight: l.id === listId ? 600 : 400,
-                    transition: "background 0.12s, color 0.12s",
-                  }}
-                  onMouseEnter={e => { if (l.id !== listId) { (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; } }}
-                  onMouseLeave={e => { if (l.id !== listId) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; } }}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 flex-shrink-0" style={{ color: l.id === listId ? "var(--accent)" : "currentColor" }}>
-                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-                  </svg>
-                  <span className="flex-1 truncate">{l.name}</span>
-                  <span
-                    className="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0"
-                    style={{ background: "var(--surface)", color: "var(--text-secondary)", minWidth: "1.5rem", textAlign: "center" }}
-                  >
-                    {l._count.items}
-                  </span>
-                </button>
-              ))}
-
-              {/* New list input */}
-              <div className="flex gap-1.5 px-1 pt-2 pb-1">
-                <input
-                  value={newListName}
-                  onChange={e => setNewListName(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && createList()}
-                  placeholder="New list…"
-                  disabled={creatingList}
-                  className="flex-1 px-2 py-1.5 rounded-xl text-xs outline-none disabled:opacity-50"
-                  style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                />
-                <button
-                  onClick={createList}
-                  disabled={!newListName.trim() || creatingList}
-                  className="px-2 py-1.5 rounded-xl text-xs font-medium disabled:opacity-40 flex items-center justify-center flex-shrink-0"
-                  style={{ background: "var(--accent)", color: "white", minWidth: "1.75rem" }}
-                >
-                  {creatingList
-                    ? <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-                    : "+"
-                  }
-                </button>
-              </div>
-            </div>
-          </div>
-        </nav>
-      </aside>
+      <Sidebar />
 
       {/* ── Main content ── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -650,7 +634,7 @@ function ListPageInner() {
           {/* Spacer */}
           <div className="ml-auto flex items-center gap-2">
             <button
-              onClick={exportCSV}
+              onClick={() => setShowExportModal(true)}
               disabled={exporting || list.items.length === 0}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-40"
               style={{ background: "var(--accent)", color: "white", transition: "opacity 0.12s" }}
@@ -899,6 +883,13 @@ function ListPageInner() {
       />
 
       {confirmDialog && <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />}
+      {showExportModal && (
+        <ExportModal
+          onClose={() => setShowExportModal(false)}
+          onExport={exportCSV}
+          exporting={exporting}
+        />
+      )}
     </div>
   );
 }

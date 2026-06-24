@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Sidebar from "@/components/Sidebar";
 
 interface User {
   id: string; email: string; fullName: string; role: string; status: string;
@@ -148,15 +149,13 @@ export default function AdminPage() {
   const inputStyle = { background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" };
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--background)" }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
       <style>{`@keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }`}</style>
 
-      <div className="border-b px-6 py-4 flex items-center gap-4" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-        <button onClick={() => router.push("/dashboard")} className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><polyline points="15 18 9 12 15 6"/></svg>
-          Dashboard
-        </button>
-        <span style={{ color: "var(--border)" }}>·</span>
+      <Sidebar />
+
+      <main className="flex-1 overflow-y-auto">
+      <div className="border-b px-6 py-4 flex items-center gap-3" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
         <h1 className="font-semibold">Admin Panel</h1>
       </div>
 
@@ -328,6 +327,7 @@ export default function AdminPage() {
 
       <ToastStack toasts={toasts} />
       {confirmDialog && <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />}
+      </main>
     </div>
   );
 }

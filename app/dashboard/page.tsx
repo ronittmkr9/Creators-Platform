@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { cachedFetch, getCached, getCacheEntry, invalidateCache, setCached } from "@/lib/client-cache";
 import toast, { Toaster } from "react-hot-toast";
 import Link from "next/link";
+import Sidebar from "@/components/Sidebar";
 
 interface Creator {
   pk: string;
@@ -71,6 +72,7 @@ const DEFAULT_FILTERS = {
   creatorSize: "", creatorType: "", collabStatus: "",
   followersMin: "", followersMax: "",
   hasEmail: "", hasTiktok: "", hasYoutube: "",
+  hashtag: "",
   sortBy: "followerCount", sortOrder: "desc",
 };
 
@@ -115,6 +117,7 @@ function buildCacheKey(q: string, p: number, f: typeof DEFAULT_FILTERS): { key: 
   if (f.hasEmail) params.set("hasEmail", f.hasEmail);
   if (f.hasTiktok) params.set("hasTiktok", f.hasTiktok);
   if (f.hasYoutube) params.set("hasYoutube", f.hasYoutube);
+  if (f.hashtag) params.set("hashtag", f.hashtag);
   return { key: `creators:${params.toString()}`, params };
 }
 
@@ -409,6 +412,17 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     }
   }
 
+  // Detect #hashtag tokens — extract and consume them
+  if (!extracted.hashtag) {
+    const tags: string[] = [];
+    for (let i = 0; i < tokens.length; i++) {
+      if (consumed.has(i)) continue;
+      const t = tokens[i];
+      if (t.startsWith("#") && t.length > 1) { tags.push(t.slice(1)); consumed.add(i); }
+    }
+    if (tags.length) extracted.hashtag = tags.join("|");
+  }
+
   const stopWords = new Set(["creators", "creator", "influencer", "influencers", "with", "and", "the", "in", "from", "a", "an", "of", "for", "between", "has", "have", "is", "are", "who", "located", "based", "to", "niche", "niches", "but", "or"]);
   for (let i = 0; i < tokens.length; i++) { if (stopWords.has(tokens[i])) consumed.add(i); }
 
@@ -451,24 +465,6 @@ function ConfirmModal({ dialog, onClose }: { dialog: ConfirmDialog; onClose: () 
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Cancel</button>
           <button onClick={() => { dialog.onConfirm(); onClose(); }} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ background: dialog.danger ? "#ef4444" : "var(--accent)", color: "white" }}>{dialog.confirmLabel ?? "Confirm"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SignOutModal({ onConfirm, onClose, userName }: { onConfirm: () => void; onClose: () => void; userName: string }) {
-  return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={onClose}>
-      <div className="rounded-2xl p-6 w-[340px] shadow-2xl text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
-        <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: "var(--surface-2)" }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-7 h-7" style={{ color: "var(--text-secondary)" }}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        </div>
-        <h3 className="font-semibold text-base mb-1" style={{ color: "var(--text-primary)" }}>Sign out?</h3>
-        <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>You&apos;ll be signed out of <span style={{ color: "var(--text-primary)" }}>{userName}</span>.</p>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>Stay</button>
-          <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-lg text-sm font-medium" style={{ background: "var(--accent)", color: "white" }}>Sign out</button>
         </div>
       </div>
     </div>
@@ -549,6 +545,7 @@ const FILTER_LABELS: Record<string, string> = {
   creatorSize: "Size", creatorType: "Type", collabStatus: "Status",
   followersMin: "Min Followers", followersMax: "Max Followers",
   hasEmail: "Has Email", hasTiktok: "Has TikTok", hasYoutube: "Has YouTube",
+  hashtag: "Hashtag",
 };
 
 function ActiveFilterPills({ filters, onRemove }: { filters: typeof DEFAULT_FILTERS; onRemove: (key: string) => void }) {
@@ -559,7 +556,12 @@ function ActiveFilterPills({ filters, onRemove }: { filters: typeof DEFAULT_FILT
       {active.map(([k, v]) => (
         <span key={k} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
           style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)" }}>
-          {FILTER_LABELS[k] ?? k}: {k === "followersMin" || k === "followersMax" ? fmtNum(v) : v}
+          {FILTER_LABELS[k] ?? k}: {
+            k === "followersMin" || k === "followersMax" ? fmtNum(v) :
+            k === "hashtag" ? v.split("|").map(t => `#${t}`).join(", ") :
+            v.includes("|") ? v.split("|").join(", ") :
+            v
+          }
           <button onClick={() => onRemove(k)} className="ml-0.5 opacity-70 hover:opacity-100" aria-label={`Remove ${k} filter`}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-3 h-3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -656,7 +658,6 @@ export default function DashboardPage() {
   const [filters, setFilters] = useState<typeof DEFAULT_FILTERS>({ ...DEFAULT_FILTERS });
 
   const [showFilters, setShowFilters] = useState(false);
-  const [showListsSidebar, setShowListsSidebar] = useState(false);
   const [savedLists, setSavedLists] = useState<SavedList[]>([]);
   const [selectedCreators, setSelectedCreators] = useState<Set<string>>(new Set());
   const [showAddToListModal, setShowAddToListModal] = useState(false);
@@ -664,7 +665,6 @@ export default function DashboardPage() {
   const [newListName, setNewListName] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
-  const [showSignOut, setShowSignOut] = useState(false);
   const [nicheOptions, setNicheOptions] = useState<string[]>([]);
   const [countryOptions, setCountryOptions] = useState<string[]>([]);
   const [cityOptions, setCityOptions] = useState<string[]>([]);
@@ -957,21 +957,7 @@ export default function DashboardPage() {
   }, [page]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
-  async function logout() {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-      toast.success("Signed out successfully");
-      router.push("/login");
-    } catch (error) {
-      console.error("Logout error:", error);
-      toast.error("Failed to sign out");
-    }
-  }
-
   function refreshLists() {
-    // Invalidate then fetch directly — always hits network after a mutation.
-    // We use setCached to update the module-level store so future cachedFetch
-    // calls see the fresh data without a redundant network round-trip.
     invalidateCache("lists");
     fetch("/api/lists")
       .then(r => r.ok ? r.json() : { lists: [] })
@@ -979,6 +965,7 @@ export default function DashboardPage() {
         const lists = d.lists || [];
         setCached("lists", { lists });
         setSavedLists(lists);
+        window.dispatchEvent(new CustomEvent("lists:updated"));
       })
       .catch(err => {
         console.error("Error refreshing lists:", err);
@@ -1151,23 +1138,6 @@ export default function DashboardPage() {
     }
   }
 
-  function openList(listId: string) {
-    try {
-      sessionStorage.setItem("lists_sidebar_open", "true");
-      router.push(`/dashboard/lists?id=${listId}`);
-    } catch (error) {
-      console.error("Error opening list:", error);
-      toast.error("Failed to open list");
-    }
-  }
-
-  useEffect(() => {
-    try {
-      const open = sessionStorage.getItem("lists_sidebar_open");
-      if (open === "true") { setShowListsSidebar(true); sessionStorage.removeItem("lists_sidebar_open"); }
-    } catch {}
-  }, []);
-
   // ── Derived ────────────────────────────────────────────────────────────────
   const activeFiltersCount = Object.entries(filters).filter(([k, v]) => !["sortBy", "sortOrder"].includes(k) && v !== "").length;
   const inputStyle = { background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" };
@@ -1210,141 +1180,7 @@ export default function DashboardPage() {
 
       <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
 
-        {/* ── Sidebar ── */}
-        <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-          {/* Logo */}
-          <div className="px-4 py-4 border-b" style={{ borderColor: "var(--border)" }}>
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "var(--accent)" }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-4 h-4"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-              </div>
-              <div className="min-w-0">
-                <p className="font-semibold text-xs leading-tight truncate" style={{ color: "var(--text-primary)" }}>CreatorDiscover</p>
-                <p className="text-xs leading-tight" style={{ color: "var(--text-secondary)" }}>Veel</p>
-              </div>
-            </div>
-          </div>
-
-          <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-            {/* Dashboard link */}
-            <Link href="/overview"
-              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-              style={{ color: "var(--text-secondary)" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0">
-                <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-                <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-              </svg>
-              <span>Dashboard</span>
-            </Link>
-            {/* Search link — active */}
-            <Link href="/dashboard"
-              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium"
-              style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-              <span>Search</span>
-            </Link>
-
-            {/* Notes */}
-            <Link href="/notes"
-              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-              style={{ color: "var(--text-secondary)" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              <span>Notes</span>
-            </Link>
-
-            {/* Saved Lists */}
-            <div>
-              <button onClick={() => setShowListsSidebar(!showListsSidebar)}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
-                style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-                <span className="flex-1 text-left">Saved Lists</span>
-                {savedLists.length > 0 && (
-                  <span className="text-xs px-1.5 py-0.5 rounded-full font-medium"
-                    style={{ background: showListsSidebar ? "rgba(99,102,241,0.2)" : "var(--surface-2)", color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)" }}>
-                    {savedLists.length}
-                  </span>
-                )}
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-                  className={`w-3 h-3 flex-shrink-0 transition-transform duration-150 ${showListsSidebar ? "rotate-180" : ""}`}>
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
-
-              {showListsSidebar && (
-                <div className="mt-0.5 ml-2 pl-3 border-l space-y-0.5" style={{ borderColor: "var(--border)" }}>
-                  {savedLists.length === 0 ? (
-                    <p className="text-xs px-2 py-2" style={{ color: "var(--text-secondary)" }}>No lists yet</p>
-                  ) : (
-                    savedLists.map(list => (
-                      <button key={list.id} onClick={() => openList(list.id)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left transition-colors"
-                        style={{ color: "var(--text-secondary)" }}
-                        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 flex-shrink-0" style={{ color: "var(--accent)", opacity: 0.7 }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-                        <span className="flex-1 truncate">{list.name}</span>
-                        <span className="text-xs tabular-nums px-1 py-0.5 rounded"
-                          style={{ background: "var(--surface-2)", color: "var(--text-secondary)", minWidth: "1.25rem", textAlign: "center" }}>
-                          {list._count.items}
-                        </span>
-                      </button>
-                    ))
-                  )}
-                  {/* New list input */}
-                  <div className="flex gap-1.5 pt-1.5 pb-1">
-                    <input value={newListName} onChange={e => setNewListName(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && createList()}
-                      placeholder="New list…"
-                      className="flex-1 px-2 py-1 rounded-lg text-xs outline-none"
-                      style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
-                    <button onClick={createList} disabled={!newListName.trim()}
-                      className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold disabled:opacity-40 flex-shrink-0"
-                      style={{ background: "var(--accent)", color: "white" }}>+</button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Admin */}
-            {user?.role === "ADMIN" && (
-              <Link href="/admin"
-                className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-                style={{ color: "var(--text-secondary)" }}
-                onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                <span>Admin</span>
-              </Link>
-            )}
-          </nav>
-
-          {/* User footer */}
-          <div className="p-2 border-t" style={{ borderColor: "var(--border)" }}>
-            <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5" style={{ background: "var(--surface-2)" }}>
-              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold"
-                style={{ background: "var(--accent)", color: "white" }}>
-                {(user?.fullName || user?.email || "?").charAt(0).toUpperCase()}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium truncate leading-tight" style={{ color: "var(--text-primary)" }}>{user?.fullName || "—"}</p>
-                <p className="text-xs truncate leading-tight" style={{ color: "var(--text-secondary)" }}>{user?.email}</p>
-              </div>
-            </div>
-            <button onClick={() => setShowSignOut(true)}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-              style={{ color: "var(--text-secondary)" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.08)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              <span>Sign out</span>
-            </button>
-          </div>
-        </aside>
+        <Sidebar />
 
         {/* ── Main content ── */}
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -1672,7 +1508,6 @@ export default function DashboardPage() {
       </div>
 
       {confirmDialog && <ConfirmModal dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />}
-      {showSignOut && <SignOutModal onConfirm={logout} onClose={() => setShowSignOut(false)} userName={user?.email ?? ""} />}
       <ToastStack toasts={toasts} />
     </>
   );

@@ -6,8 +6,8 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell, Legend,
 } from "recharts";
 import toast, { Toaster } from "react-hot-toast";
-import { cachedFetch, invalidateCache } from "@/lib/client-cache";
-import Link from "next/link";
+import { cachedFetch } from "@/lib/client-cache";
+import Sidebar from "@/components/Sidebar";
 
 interface Row { name: string; count: number }
 interface AnalyticsData {
@@ -21,9 +21,7 @@ interface AnalyticsData {
   cities: Row[];
 }
 interface User { id: string; email: string; fullName: string; role: string }
-interface SavedList { id: string; name: string; _count: { items: number } }
 interface MetaResponse { countries: string[] }
-interface ListsResponse { lists: SavedList[] }
 
 const COLORS = [
   "#6366f1", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981",
@@ -97,10 +95,6 @@ export default function OverviewPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [savedLists, setSavedLists] = useState<SavedList[]>([]);
-  const [showListsSidebar, setShowListsSidebar] = useState(false);
-  const [newListName, setNewListName] = useState("");
-  const [showSignOut, setShowSignOut] = useState(false);
   const [allCountries, setAllCountries] = useState<string[]>([]);
   const [selectedCountry, setSelectedCountry] = useState("");
   const [selectedState, setSelectedState] = useState("");
@@ -126,14 +120,6 @@ export default function OverviewPage() {
       fetch("/api/creators/meta").then(r => r.json()),
     ).then(d => setAllCountries(d.countries || []));
   }, []);
-
-  // Saved lists — cached, but invalidated on create so mutations stay correct.
-  useEffect(() => {
-    if (!user) return;
-    cachedFetch<ListsResponse>("saved-lists", () =>
-      fetch("/api/lists").then(r => r.json()),
-    ).then(d => setSavedLists(d.lists || []));
-  }, [user]);
 
   const fetchAnalytics = useCallback(async () => {
     setLoadingData(true);
@@ -165,27 +151,6 @@ export default function OverviewPage() {
     if (!loading) fetchAnalytics();
   }, [loading, fetchAnalytics]);
 
-  const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-  };
-
-  const createList = async () => {
-    if (!newListName.trim()) return;
-    const res = await fetch("/api/lists", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newListName.trim() }),
-    });
-    if (res.ok) {
-      const d = await res.json();
-      setSavedLists(p => [...p, d.list]);
-      invalidateCache("saved-lists"); // keep the module cache in sync with the mutation
-      setNewListName("");
-      toast.success("List created");
-    }
-  };
-
   const clearFilter = () => { setSelectedCountry(""); setSelectedState(""); setSelectedCity(""); };
 
   if (loading) {
@@ -201,145 +166,7 @@ export default function OverviewPage() {
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: "var(--background)" }}>
       <Toaster position="top-right" />
-
-      {/* ── Sidebar ── */}
-      <aside className="w-56 flex-shrink-0 flex flex-col border-r" style={{ background: "var(--surface)", borderColor: "var(--border)" }}>
-        <div className="px-4 py-4 border-b" style={{ borderColor: "var(--border)" }}>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "var(--accent)" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-4 h-4"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            </div>
-            <div className="min-w-0">
-              <p className="font-semibold text-xs leading-tight truncate" style={{ color: "var(--text-primary)" }}>CreatorDiscover</p>
-              <p className="text-xs leading-tight" style={{ color: "var(--text-secondary)" }}>Veel</p>
-            </div>
-          </div>
-        </div>
-
-        <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-          {/* Dashboard — active */}
-          <Link href="/overview"
-            className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium"
-            style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0">
-              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-              <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-            </svg>
-            <span>Dashboard</span>
-          </Link>
-
-          {/* Search */}
-          <Link href="/dashboard"
-            className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-            style={{ color: "var(--text-secondary)" }}
-            onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <span>Search</span>
-          </Link>
-
-          {/* Notes */}
-          <Link href="/notes"
-            className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-            style={{ color: "var(--text-secondary)" }}
-            onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            <span>Notes</span>
-          </Link>
-
-          {/* Saved Lists */}
-          <div>
-            <button onClick={() => setShowListsSidebar(!showListsSidebar)}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
-              style={{ color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)", background: showListsSidebar ? "rgba(99,102,241,0.1)" : "transparent" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-              <span className="flex-1 text-left">Saved Lists</span>
-              {savedLists.length > 0 && (
-                <span className="text-xs px-1.5 py-0.5 rounded-full font-medium"
-                  style={{ background: showListsSidebar ? "rgba(99,102,241,0.2)" : "var(--surface-2)", color: showListsSidebar ? "var(--accent)" : "var(--text-secondary)" }}>
-                  {savedLists.length}
-                </span>
-              )}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-                className={`w-3 h-3 flex-shrink-0 transition-transform duration-150 ${showListsSidebar ? "rotate-180" : ""}`}>
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-            {showListsSidebar && (
-              <div className="mt-0.5 ml-2 pl-3 border-l space-y-0.5" style={{ borderColor: "var(--border)" }}>
-                {savedLists.length === 0
-                  ? <p className="text-xs px-2 py-2" style={{ color: "var(--text-secondary)" }}>No lists yet</p>
-                  : savedLists.map(list => (
-                    <button key={list.id} onClick={() => router.push("/dashboard")}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left transition-colors"
-                      style={{ color: "var(--text-secondary)" }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 flex-shrink-0" style={{ color: "var(--accent)", opacity: 0.7 }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-                      <span className="flex-1 truncate">{list.name}</span>
-                      <span className="text-xs tabular-nums px-1 py-0.5 rounded"
-                        style={{ background: "var(--surface-2)", color: "var(--text-secondary)", minWidth: "1.25rem", textAlign: "center" }}>
-                        {list._count.items}
-                      </span>
-                    </button>
-                  ))
-                }
-                <div className="flex gap-1.5 pt-1.5 pb-1">
-                  <input value={newListName} onChange={e => setNewListName(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && createList()}
-                    placeholder="New list…"
-                    className="flex-1 px-2 py-1 rounded-lg text-xs outline-none"
-                    style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--text-primary)" }} />
-                  <button onClick={createList} disabled={!newListName.trim()}
-                    className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold disabled:opacity-40 flex-shrink-0"
-                    style={{ background: "var(--accent)", color: "white" }}>+</button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {user?.role === "ADMIN" && (
-            <a href="/admin"
-              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-              style={{ color: "var(--text-secondary)" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              <span>Admin</span>
-            </a>
-          )}
-        </nav>
-
-        <div className="p-2 border-t" style={{ borderColor: "var(--border)" }}>
-          <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5" style={{ background: "var(--surface-2)" }}>
-            <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold"
-              style={{ background: "var(--accent)", color: "white" }}>
-              {(user?.fullName || user?.email || "?").charAt(0).toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium truncate leading-tight" style={{ color: "var(--text-primary)" }}>{user?.fullName || "—"}</p>
-              <p className="text-xs truncate leading-tight" style={{ color: "var(--text-secondary)" }}>{user?.email}</p>
-            </div>
-          </div>
-          {showSignOut ? (
-            <div className="flex items-center gap-2 px-3 py-2">
-              <span className="text-xs flex-1" style={{ color: "var(--text-secondary)" }}>Sign out?</span>
-              <button onClick={handleLogout} className="text-xs font-semibold px-2 py-0.5 rounded" style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>Yes</button>
-              <button onClick={() => setShowSignOut(false)} className="text-xs px-2 py-0.5 rounded" style={{ color: "var(--text-secondary)", background: "var(--surface-2)" }}>No</button>
-            </div>
-          ) : (
-            <button onClick={() => setShowSignOut(true)}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
-              style={{ color: "var(--text-secondary)" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.08)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              <span>Sign out</span>
-            </button>
-          )}
-        </div>
-      </aside>
+      <Sidebar />
 
       {/* ── Main ── */}
       <main className="flex-1 overflow-y-auto">

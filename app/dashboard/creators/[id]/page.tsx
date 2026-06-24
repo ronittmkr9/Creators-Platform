@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Toaster, toast } from "react-hot-toast";
 import { cachedFetch, setCached, invalidateCache, invalidateCacheByPrefix } from "@/lib/client-cache";
+import Sidebar from "@/components/Sidebar";
 
 type Creator = Record<string, unknown>;
 
@@ -725,7 +726,7 @@ export default function CreatorDetailPage() {
   const postsToShow = showAllPosts ? 25 : 6;
 
   return (
-    <>
+    <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
       <Toaster
         position="bottom-center"
         toastOptions={{
@@ -758,8 +759,10 @@ export default function CreatorDetailPage() {
         .animate-spin { animation: spin 0.7s linear infinite; }
       `}</style>
 
-      <div className="min-h-screen pb-16" style={{ background: "var(--background)" }}>
-        <div className="max-w-6xl mx-auto px-6 py-8">
+      <Sidebar />
+
+      <main className="flex-1 overflow-y-auto pb-16">
+        <div className="max-w-5xl mx-auto px-6 py-8">
 
           {/* Back */}
           <button onClick={() => router.back()}
@@ -1003,7 +1006,7 @@ export default function CreatorDetailPage() {
           <NotesSection creatorId={params.id as string} />
 
         </div>
-      </div>
-    </>
+      </main>
+    </div>
   );
 }
