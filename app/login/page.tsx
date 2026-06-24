@@ -204,7 +204,7 @@ export default function LoginPage() {
         // Redirect after a brief delay
         setTimeout(() => {
           try {
-            router.push("/dashboard");
+            router.push("/overview");
           } catch (navigationError) {
             console.error("Navigation error:", navigationError);
             const errorMsg = "Error redirecting to dashboard";

@@ -9,7 +9,7 @@ function createPrisma() {
     connectionString: process.env.DATABASE_URL,
     max: 5,                       // more headroom for concurrent users
     idleTimeoutMillis: 30000,      // release idle connections after 30s
-    connectionTimeoutMillis: 30000, // fail fast (8s) instead of hanging for ~11 minutes
+    connectionTimeoutMillis: 15000, // fail fast (8s) instead of hanging for ~11 minutes
     ssl: { rejectUnauthorized: false },
   });
   return new PrismaClient({ adapter: new PrismaPg(pool), log: ["error"] });

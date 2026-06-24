@@ -22,8 +22,9 @@ model User {
   updatedAt    DateTime   @updatedAt
   lastLoginAt  DateTime?
 
-  auditLogs  AuditLog[]
-  savedLists SavedList[]
+  auditLogs    AuditLog[]
+  savedLists   SavedList[]
+  creatorNotes CreatorNote[]
 
   @@map("users")
   @@schema("app")
@@ -89,17 +90,35 @@ model AuditLog {
   @@schema("app")
 }
 
+model CreatorNote {
+  id             String   @id @default(cuid())
+  creatorId      String   @map("creator_id")
+  userId         String   @map("user_id")
+  isOnboarded    Boolean  @default(false) @map("is_onboarded")
+  campaignNiches String[] @map("campaign_niches")
+  note           String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([creatorId, userId])
+  @@map("creator_notes")
+  @@schema("app")
+}
+
 enum AuditAction {
   LOGIN
   LOGOUT
   SEARCH
   VIEW_CREATOR
-  EDIT_CREATOR      // ← NEW: admin edits a creator record directly
+  EDIT_CREATOR
   CREATE_LIST
   ADD_TO_LIST
   REMOVE_FROM_LIST
   EXPORT
   FAILED_LOGIN
+  NOTE
 
   @@schema("app")
 }

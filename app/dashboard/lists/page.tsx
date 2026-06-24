@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { cachedFetch, invalidateCache } from "@/lib/client-cache";
 import toast, { Toaster } from "react-hot-toast";
+import Link from "next/link";
 
 interface Creator {
   pk: string;
@@ -477,7 +478,7 @@ function ListPageInner() {
 
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {/* Search nav item */}
-          <a
+          <Link
             href="/dashboard"
             className="flex items-center gap-3 px-3 py-2 rounded-xl text-sm nav-item-hover"
             style={{ color: "var(--text-secondary)" }}
@@ -486,7 +487,7 @@ function ListPageInner() {
               <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
             </svg>
             Search
-          </a>
+          </Link>
 
           {/* Saved Lists — always expanded on this page */}
           <div>

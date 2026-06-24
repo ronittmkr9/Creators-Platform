@@ -3,6 +3,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react
 import { useRouter } from "next/navigation";
 import { cachedFetch, getCached, getCacheEntry, invalidateCache, setCached } from "@/lib/client-cache";
 import toast, { Toaster } from "react-hot-toast";
+import Link from "next/link";
 
 interface Creator {
   pk: string;
@@ -38,6 +39,7 @@ interface CreatorsMetaResponse {
   cities?: string[];
   states?: string[];
   creatorTypes?: string[];
+  age_group?: string[];
 }
 interface Toast { id: number; msg: string; type: "success" | "error" | "info"; }
 interface ConfirmDialog { title: string; body: string; onConfirm: () => void; confirmLabel?: string; danger?: boolean; }
@@ -237,27 +239,22 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
     }
   }
 
-  function ageRangeToGroup(lo: number, hi: number): string | null {
+  function ageRangeToGroups(lo: number, hi: number): string[] {
     if (lo > hi) { const t = lo; lo = hi; hi = t; }
-    // Pick the predefined bucket with the greatest overlap with [lo, hi],
-    // so a range straddling two buckets (e.g. 20-30) resolves to whichever
-    // bucket it mostly falls into, rather than always rounding down.
     const buckets: [string, number, number][] = [
       ["18-24", 18, 24],
-      ["25-34", 25, 34],
-      ["35-44", 35, 44],
-      ["45+", 45, 120],
+      ["20-29", 20, 29],
+      ["30-39", 30, 39],
+      ["40-49", 40, 49],
+      ["40-50", 40, 50],
+      ["50-59", 50, 59],
+      ["60-69", 60, 69],
     ];
-    let best: string | null = null;
-    let bestOverlap = 0;
+    const matches: string[] = [];
     for (const [name, bLo, bHi] of buckets) {
-      const overlap = Math.min(hi, bHi) - Math.max(lo, bLo);
-      if (overlap > bestOverlap) { bestOverlap = overlap; best = name; }
+      if (lo <= bHi && hi >= bLo) matches.push(name);
     }
-    if (best) return best;
-    if (hi < 18) return "18-24";
-    if (lo >= 45) return "45+";
-    return null;
+    return matches;
   }
 
   for (let i = 0; i < tokens.length; i++) {
@@ -276,14 +273,14 @@ function parseNaturalQuery(raw: string, lexicons: Lexicons = EMPTY_LEXICONS): { 
         if (tok.endsWith("+")) { const n = parseInt(tok); if (!isNaN(n)) { nums.push(n, 70); consumedHere.push(j); } break; }
         break;
       }
-      if (nums.length >= 2) { const g = ageRangeToGroup(Math.min(nums[0], nums[1]), Math.max(nums[0], nums[1])); if (g) extracted.age_group = g; consumedHere.forEach(idx => consumed.add(idx)); }
-      else if (nums.length === 1) { const g = ageRangeToGroup(nums[0], nums[0]); if (g) extracted.age_group = g; consumedHere.forEach(idx => consumed.add(idx)); }
+      if (nums.length >= 2) { const gs = ageRangeToGroups(Math.min(nums[0], nums[1]), Math.max(nums[0], nums[1])); if (gs.length) extracted.age_group = gs.join(","); consumedHere.forEach(idx => consumed.add(idx)); }
+      else if (nums.length === 1) { const gs = ageRangeToGroups(nums[0], nums[0]); if (gs.length) extracted.age_group = gs.join(","); consumedHere.forEach(idx => consumed.add(idx)); }
     }
   }
   for (let i = 0; i < tokens.length; i++) {
     if (consumed.has(i) || extracted.age_group) continue;
     const m = tokens[i].match(/^(\d{1,2})-(\d{1,2})$/);
-    if (m) { const lo = parseInt(m[1]); const hi = parseInt(m[2]); const g = ageRangeToGroup(Math.min(lo, hi), Math.max(lo, hi)); if (g) { extracted.age_group = g; consumed.add(i); } }
+    if (m) { const lo = parseInt(m[1]); const hi = parseInt(m[2]); const gs = ageRangeToGroups(Math.min(lo, hi), Math.max(lo, hi)); if (gs.length) { extracted.age_group = gs.join(","); consumed.add(i); } }
   }
 
   const genderMap: Record<string, string> = { female: "female", women: "female", woman: "female", girl: "female", girls: "female", male: "male", men: "male", man: "male", boy: "male", boys: "male" };
@@ -674,6 +671,10 @@ export default function DashboardPage() {
   const [stateOptions, setStateOptions] = useState<string[]>([]);
   const [creatorTypeOptions, setCreatorTypeOptions] = useState<string[]>([]);
   const [ageGroupOptions, setAgeGroupOptions] = useState<string[]>([]);
+  // Cascaded dropdown options — populated by secondary meta fetches when
+  // country/state is selected. Fall back to the full flat lists when nothing selected.
+  const [cascadedStateOptions, setCascadedStateOptions] = useState<string[]>([]);
+  const [cascadedCityOptions, setCascadedCityOptions] = useState<string[]>([]);
   const cleanQueryRef = useRef("");
   const lexiconsRef = useRef<Lexicons>(EMPTY_LEXICONS);
   const requestId = useRef(0);
@@ -713,6 +714,69 @@ export default function DashboardPage() {
   useEffect(() => {
     lexiconsRef.current = { niches: nicheOptions, countries: countryOptions, cities: cityOptions, age_group: ageGroupOptions, states: stateOptions, creatorTypes: creatorTypeOptions };
   }, [nicheOptions, countryOptions, cityOptions, ageGroupOptions, stateOptions, creatorTypeOptions]);
+ 
+  // ── Bidirectional location cascade ─────────────────────────────────────────
+  // Country selected → scope state + city options to that country.
+  // Country cleared  → reset to full lists (unless state is still set, in
+  //                    which case the state effect re-scopes cities).
+  useEffect(() => {
+    if (!filters.country) {
+      setCascadedStateOptions(stateOptions);
+      if (!filters.state) setCascadedCityOptions(cityOptions);
+      return;
+    }
+    cachedFetch<CreatorsMetaResponse>(
+      `creators/meta:country=${filters.country}`,
+      () => fetch(`/api/creators/meta?country=${encodeURIComponent(filters.country)}`).then(r => r.ok ? r.json() : {}),
+    ).then(d => {
+      setCascadedStateOptions((d.states ?? []).filter(Boolean).sort());
+      // Only overwrite city list when no state is already pinning it
+      if (!filters.state) setCascadedCityOptions((d.cities ?? []).filter(Boolean).sort());
+    });
+  }, [filters.country]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // State selected → scope city options to that state; auto-fill country if missing.
+  // State cleared  → revert city options to country-scoped (or all).
+  useEffect(() => {
+    if (!filters.state) {
+      if (filters.country) {
+        cachedFetch<CreatorsMetaResponse>(
+          `creators/meta:country=${filters.country}`,
+          () => fetch(`/api/creators/meta?country=${encodeURIComponent(filters.country)}`).then(r => r.ok ? r.json() : {}),
+        ).then(d => setCascadedCityOptions((d.cities ?? []).filter(Boolean).sort()));
+      } else {
+        setCascadedCityOptions(cityOptions);
+      }
+      return;
+    }
+    cachedFetch<CreatorsMetaResponse>(
+      `creators/meta:state=${filters.state}`,
+      () => fetch(`/api/creators/meta?state=${encodeURIComponent(filters.state)}`).then(r => r.ok ? r.json() : {}),
+    ).then(d => {
+      setCascadedCityOptions((d.cities ?? []).filter(Boolean).sort());
+      // Reverse lookup: auto-fill country from state
+      if (!filters.country && d.countries?.[0]) {
+        setFilters(p => ({ ...p, country: d.countries![0] }));
+      }
+    });
+  }, [filters.state]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // City selected → auto-fill country and/or state if they are missing.
+  // City cleared  → nothing to do; the other effects already own their lists.
+  useEffect(() => {
+    if (!filters.city) return;
+    if (filters.country && filters.state) return; // already fully resolved
+    cachedFetch<CreatorsMetaResponse>(
+      `creators/meta:city=${filters.city}`,
+      () => fetch(`/api/creators/meta?city=${encodeURIComponent(filters.city)}`).then(r => r.ok ? r.json() : {}),
+    ).then(d => {
+      setFilters(p => ({
+        ...p,
+        country: p.country || d.countries?.[0] || p.country,
+        state:   p.state   || d.states?.[0]   || p.state,
+      }));
+    });
+  }, [filters.city]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function showToast(msg: string, type: Toast["type"] = "success") {
     const id = ++toastCounter;
@@ -1162,13 +1226,35 @@ export default function DashboardPage() {
           </div>
 
           <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-            {/* Search link */}
-            <a href="/dashboard"
+            {/* Dashboard link */}
+            <Link href="/overview"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
+              style={{ color: "var(--text-secondary)" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0">
+                <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+              </svg>
+              <span>Dashboard</span>
+            </Link>
+            {/* Search link — active */}
+            <Link href="/dashboard"
               className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium"
               style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
               <span>Search</span>
-            </a>
+            </Link>
+
+            {/* Notes */}
+            <Link href="/notes"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
+              style={{ color: "var(--text-secondary)" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              <span>Notes</span>
+            </Link>
 
             {/* Saved Lists */}
             <div>
@@ -1226,14 +1312,14 @@ export default function DashboardPage() {
 
             {/* Admin */}
             {user?.role === "ADMIN" && (
-              <a href="/admin"
+              <Link href="/admin"
                 className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
                 style={{ color: "var(--text-secondary)" }}
                 onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.background = "var(--surface-2)"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-primary)"; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.background = "transparent"; (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)"; }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 flex-shrink-0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 <span>Admin</span>
-              </a>
+              </Link>
             )}
           </nav>
 
@@ -1313,9 +1399,12 @@ export default function DashboardPage() {
                       Location
                     </FilterSectionLabel>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                      <FilterSelect label="Country" value={filters.country} onChange={v => setFilters(p => ({ ...p, country: v }))} options={countryOptions} placeholder="All countries" />
-                      <FilterSelect label="State" value={filters.state} onChange={v => setFilters(p => ({ ...p, state: v }))} options={stateOptions} placeholder="All states" />
-                      <FilterSelect label="City" value={filters.city} onChange={v => setFilters(p => ({ ...p, city: v }))} options={cityOptions} placeholder="All cities" />
+                      {/* Country — always enabled; picking it resets state + city */}
+                      <FilterSelect label="Country" value={filters.country} onChange={v => setFilters(p => ({ ...p, country: v, state: "", city: "" }))} options={countryOptions} placeholder="All countries" />
+                      {/* State — always enabled; picking it resets city; reverse-fills country */}
+                      <FilterSelect label="State" value={filters.state} onChange={v => setFilters(p => ({ ...p, state: v, city: "" }))} options={cascadedStateOptions.length ? cascadedStateOptions : stateOptions} placeholder="All states" />
+                      {/* City — always enabled; reverse-fills country + state */}
+                      <FilterSelect label="City" value={filters.city} onChange={v => setFilters(p => ({ ...p, city: v }))} options={cascadedCityOptions.length ? cascadedCityOptions : cityOptions} placeholder="All cities" />
                     </div>
                   </div>
 

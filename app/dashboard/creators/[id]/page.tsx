@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Toaster, toast } from "react-hot-toast";
-import { cachedFetch, setCached, invalidateCache } from "@/lib/client-cache";
+import { cachedFetch, setCached, invalidateCache, invalidateCacheByPrefix } from "@/lib/client-cache";
 
 type Creator = Record<string, unknown>;
 
@@ -24,7 +24,7 @@ function fmtNum(n: string | number | null | undefined): string {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-xl p-5" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-      <h3 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "var(--text-secondary)" }}>
+      <h3 className="text-xs font-semibold uppercase tracking-wider mb-4" style={{ color: "var(--text-secondary)" }}>
         {title}
       </h3>
       {children}
@@ -35,7 +35,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   if (value === null || value === undefined || value === "" || value === "—") return null;
   return (
-    <div className="flex items-start justify-between gap-4 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+    <div className="flex items-start justify-between gap-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
       <span className="text-sm flex-shrink-0" style={{ color: "var(--text-secondary)" }}>{label}</span>
       <span className="text-sm text-right break-all" style={{ color: "var(--text-primary)" }}>{value}</span>
     </div>
@@ -174,7 +174,6 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [activeSection, setActiveSection] = useState<string>(ADMIN_EDIT_GROUPS[0].section);
 
-  // Populate edits from creator whenever it changes
   useEffect(() => {
     const initial: Record<string, string> = {};
     ADMIN_EDIT_GROUPS.forEach((g) =>
@@ -205,7 +204,6 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
 
     setSaving(true);
 
-    // Build changed payload
     const changed: Record<string, unknown> = {};
     ADMIN_EDIT_GROUPS.forEach((g) =>
       g.fields.forEach((f) => {
@@ -236,9 +234,7 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
       }
 
       const updated = { ...creator, ...changed };
-      // Patch module-level cache so back-navigation shows fresh data
       setCached(`creator:${creator.username}`, { creator: updated });
-      // Bust search result caches so the dashboard grid re-fetches
       invalidateCache("creators");
 
       onSaved(updated);
@@ -269,34 +265,36 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
     ADMIN_EDIT_GROUPS.find((g) => g.section === section)?.fields.some((f) => dirtyKeys.has(f.key));
 
   return (
-    <div className="mb-6 rounded-2xl overflow-hidden"
-      style={{ border: "1px solid rgba(251,191,36,0.35)", background: "var(--surface)" }}>
+    <div className="mb-8 rounded-xl overflow-hidden shadow-lg" style={{ border: "1px solid var(--border)", background: "var(--surface)" }}>
 
       {/* ── Header toggle ── */}
       <button
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-5 py-3.5 text-left"
-        style={{ borderBottom: open ? "1px solid rgba(251,191,36,0.2)" : "none" }}
+        className="w-full flex items-center justify-between px-6 py-4 text-left transition-colors hover:bg-opacity-5"
+        style={{ borderBottom: open ? "1px solid var(--border)" : "none", background: "var(--surface)" }}
       >
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm"
-            style={{ background: "rgba(251,191,36,0.15)" }}>
-            🔧
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm"
+            style={{ background: "rgba(99,102,241,0.12)", color: "var(--accent)" }}>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
           </div>
           <div>
-            <span className="text-sm font-semibold" style={{ color: "#f59e0b" }}>Admin Panel</span>
+            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Admin Controls</span>
             {dirtyKeys.size > 0 && (
-              <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full font-medium"
-                style={{ background: "rgba(251,191,36,0.2)", color: "#f59e0b" }}>
+              <span className="ml-2 text-xs px-2 py-0.5 rounded-full font-medium"
+                style={{ background: "rgba(251,191,36,0.15)", color: "#f59e0b" }}>
                 {dirtyKeys.size} unsaved
               </span>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           {open && dirtyKeys.size > 0 && (
             <span className="text-xs px-2.5 py-1 rounded-lg"
-              style={{ background: "rgba(251,191,36,0.12)", color: "#f59e0b", border: "1px solid rgba(251,191,36,0.25)" }}>
+              style={{ background: "rgba(251,191,36,0.08)", color: "#f59e0b", border: "1px solid rgba(251,191,36,0.2)" }}>
               Unsaved changes
             </span>
           )}
@@ -309,10 +307,10 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
       </button>
 
       {open && (
-        <div className="flex" style={{ minHeight: 480 }}>
+        <div className="flex flex-col md:flex-row" style={{ minHeight: 500, background: "var(--surface)" }}>
           {/* ── Left nav ── */}
-          <div className="flex-shrink-0 w-44 py-3 border-r flex flex-col gap-0.5 overflow-y-auto"
-            style={{ borderColor: "rgba(251,191,36,0.15)", background: "rgba(251,191,36,0.02)" }}>
+          <div className="md:w-48 flex-shrink-0 border-r flex flex-row md:flex-col gap-0.5 overflow-x-auto md:overflow-y-auto p-2 md:p-3"
+            style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}>
             {ADMIN_EDIT_GROUPS.map((g) => {
               const isActive = g.section === activeSection;
               const isDirty  = dirtyInSection(g.section);
@@ -320,15 +318,15 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
                 <button
                   key={g.section}
                   onClick={() => setActiveSection(g.section)}
-                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left transition-all"
+                  className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-left transition-all rounded-lg whitespace-nowrap md:whitespace-normal"
                   style={{
-                    background: isActive ? "rgba(251,191,36,0.12)" : "transparent",
-                    color: isActive ? "#f59e0b" : "var(--text-secondary)",
-                    borderRight: isActive ? "2px solid #f59e0b" : "2px solid transparent",
+                    background: isActive ? "rgba(99,102,241,0.12)" : "transparent",
+                    color: isActive ? "var(--accent)" : "var(--text-secondary)",
                     fontWeight: isActive ? 600 : 400,
+                    border: isActive ? "1px solid rgba(99,102,241,0.2)" : "1px solid transparent",
                   }}
                 >
-                  <span>{g.icon}</span>
+                  <span className="text-base">{g.icon}</span>
                   <span className="flex-1 truncate">{g.section}</span>
                   {isDirty && (
                     <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
@@ -342,24 +340,24 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
           {/* ── Right field area ── */}
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto px-6 py-5">
-              <div className="flex items-center gap-2 mb-5">
-                <span className="text-base">{activeGroup.icon}</span>
+              <div className="flex items-center gap-2 mb-6 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="text-xl">{activeGroup.icon}</span>
                 <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
                   {activeGroup.section}
                 </h4>
                 {activeGroup.fields.filter((f) => dirtyKeys.has(f.key)).length > 0 && (
-                  <span className="ml-1 text-xs px-1.5 py-0.5 rounded-full"
-                    style={{ background: "rgba(251,191,36,0.15)", color: "#f59e0b" }}>
+                  <span className="ml-2 text-xs px-2 py-0.5 rounded-full"
+                    style={{ background: "rgba(251,191,36,0.12)", color: "#f59e0b" }}>
                     {activeGroup.fields.filter((f) => dirtyKeys.has(f.key)).length} edited
                   </span>
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                 {activeGroup.fields.map((f) => {
                   const isDirty = dirtyKeys.has(f.key);
                   return (
-                    <div key={f.key} className={f.textarea ? "sm:col-span-2" : ""}>
+                    <div key={f.key} className={f.textarea ? "lg:col-span-2" : ""}>
                       <label className="flex items-center gap-1.5 text-xs mb-1.5 font-medium"
                         style={{ color: isDirty ? "#f59e0b" : "var(--text-secondary)" }}>
                         {f.label}
@@ -373,14 +371,14 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
                           rows={4}
                           value={edits[f.key] ?? ""}
                           onChange={(e) => handleChange(f.key, e.target.value)}
-                          className="w-full rounded-xl px-3.5 py-2.5 text-sm resize-none focus:outline-none transition-all"
+                          className="w-full rounded-lg px-3.5 py-2.5 text-sm resize-none focus:outline-none transition-all"
                           style={{
                             background: "var(--surface-2)",
                             border: isDirty
-                              ? "1.5px solid rgba(251,191,36,0.6)"
+                              ? "2px solid rgba(251,191,36,0.5)"
                               : "1px solid var(--border)",
                             color: "var(--text-primary)",
-                            boxShadow: isDirty ? "0 0 0 3px rgba(251,191,36,0.08)" : "none",
+                            boxShadow: isDirty ? "0 0 0 3px rgba(251,191,36,0.06)" : "none",
                           }}
                         />
                       ) : (
@@ -388,14 +386,14 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
                           type={f.type === "number" ? "number" : "text"}
                           value={edits[f.key] ?? ""}
                           onChange={(e) => handleChange(f.key, e.target.value)}
-                          className="w-full rounded-xl px-3.5 py-2.5 text-sm focus:outline-none transition-all"
+                          className="w-full rounded-lg px-3.5 py-2.5 text-sm focus:outline-none transition-all"
                           style={{
                             background: "var(--surface-2)",
                             border: isDirty
-                              ? "1.5px solid rgba(251,191,36,0.6)"
+                              ? "2px solid rgba(251,191,36,0.5)"
                               : "1px solid var(--border)",
                             color: "var(--text-primary)",
-                            boxShadow: isDirty ? "0 0 0 3px rgba(251,191,36,0.08)" : "none",
+                            boxShadow: isDirty ? "0 0 0 3px rgba(251,191,36,0.06)" : "none",
                           }}
                         />
                       )}
@@ -406,19 +404,19 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
             </div>
 
             {/* ── Sticky footer bar ── */}
-            <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3.5"
-              style={{ borderTop: "1px solid var(--border)", background: "var(--surface)" }}>
+            <div className="flex-shrink-0 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 px-6 py-4"
+              style={{ borderTop: "1px solid var(--border)", background: "var(--surface-2)" }}>
               <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
                 {dirtyKeys.size > 0
                   ? `${dirtyKeys.size} field${dirtyKeys.size !== 1 ? "s" : ""} modified`
-                  : "No changes"}
+                  : "No changes to save"}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 w-full sm:w-auto">
                 {dirtyKeys.size > 0 && (
                   <button
                     onClick={handleReset}
                     disabled={saving}
-                    className="px-4 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-40"
+                    className="flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-40 hover:opacity-80"
                     style={{ color: "var(--text-secondary)", border: "1px solid var(--border)", background: "transparent" }}
                   >
                     Discard
@@ -427,10 +425,10 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
                 <button
                   onClick={handleSave}
                   disabled={saving || dirtyKeys.size === 0}
-                  className="px-5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all"
+                  className="flex-1 sm:flex-none px-6 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all hover:opacity-90"
                   style={{
-                    background: dirtyKeys.size === 0 ? "var(--surface-2)" : "#f59e0b",
-                    color: dirtyKeys.size === 0 ? "var(--text-secondary)" : "#000",
+                    background: dirtyKeys.size === 0 ? "var(--surface-2)" : "var(--accent)",
+                    color: dirtyKeys.size === 0 ? "var(--text-secondary)" : "#fff",
                     cursor: saving || dirtyKeys.size === 0 ? "not-allowed" : "pointer",
                     opacity: dirtyKeys.size === 0 ? 0.5 : 1,
                   }}
@@ -463,6 +461,164 @@ function AdminEditPanel({ creator, onSaved }: AdminEditPanelProps) {
   );
 }
 
+// ─── Notes Section ────────────────────────────────────────────────────────────
+
+const CAMPAIGN_NICHES = [
+  "Fashion", "Beauty", "Fitness", "Food", "Travel", "Tech", "Gaming",
+  "Lifestyle", "Health", "Finance", "Education", "Music", "Sports",
+  "Parenting", "Home & Decor", "Business", "Comedy", "Art", "Automotive",
+];
+
+function NotesSection({ creatorId }: { creatorId: string }) {
+  const [isOnboarded, setIsOnboarded] = useState(false);
+  const [campaignNiches, setCampaignNiches] = useState<string[]>([]);
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/creators/${creatorId}/notes`)
+      .then(r => r.json())
+      .then(({ note: n }) => {
+        if (n) {
+          setIsOnboarded(n.isOnboarded ?? false);
+          setCampaignNiches(n.campaignNiches ?? []);
+          setNote(n.note ?? "");
+        }
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, [creatorId]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/creators/${creatorId}/notes`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isOnboarded, campaignNiches, note }),
+      });
+      if (!res.ok) throw new Error();
+      invalidateCacheByPrefix("notes:");
+      toast.success("Notes saved successfully");
+    } catch {
+      toast.error("Failed to save notes");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function toggleNiche(n: string) {
+    setCampaignNiches(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n]);
+  }
+
+  if (!loaded) return null;
+
+  return (
+    <div className="rounded-xl p-6 mt-6" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+      <div className="flex items-center gap-3 mb-6 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm"
+          style={{ background: "rgba(99,102,241,0.12)", color: "var(--accent)" }}>
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          </svg>
+        </div>
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          Creator Notes
+        </h3>
+        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
+          Internal
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Onboarded Status */}
+        <div className="lg:col-span-1">
+          <div className="p-4 rounded-lg" style={{ background: "var(--surface-2)" }}>
+            <p className="text-xs font-medium mb-3" style={{ color: "var(--text-secondary)" }}>Onboarding Status</p>
+            <div className="flex items-center justify-between">
+              <span className="text-sm" style={{ color: "var(--text-primary)" }}>
+                {isOnboarded ? "✅ Onboarded" : "⏳ Pending"}
+              </span>
+              <button
+                onClick={() => setIsOnboarded(!isOnboarded)}
+                className="relative w-11 h-6 rounded-full transition-colors flex-shrink-0"
+                style={{ background: isOnboarded ? "var(--accent)" : "var(--surface-2)" }}
+              >
+                <span className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform"
+                  style={{ left: isOnboarded ? "1.375rem" : "0.125rem" }} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Campaign Niches */}
+        <div className="lg:col-span-2">
+          <p className="text-xs font-medium mb-3" style={{ color: "var(--text-secondary)" }}>Campaign Niches</p>
+          <div className="flex flex-wrap gap-2">
+            {CAMPAIGN_NICHES.map(n => (
+              <button
+                key={n}
+                onClick={() => toggleNiche(n)}
+                className="text-xs px-3 py-1.5 rounded-full transition-all hover:scale-105"
+                style={{
+                  background: campaignNiches.includes(n) ? "var(--accent)" : "var(--surface-2)",
+                  color: campaignNiches.includes(n) ? "#fff" : "var(--text-secondary)",
+                  border: `1px solid ${campaignNiches.includes(n) ? "var(--accent)" : "var(--border)"}`,
+                }}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Note */}
+        <div className="lg:col-span-3">
+          <p className="text-xs font-medium mb-3" style={{ color: "var(--text-secondary)" }}>Private Note</p>
+          <textarea
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            maxLength={2000}
+            rows={4}
+            placeholder="Add internal notes about this creator..."
+            className="w-full rounded-lg px-4 py-3 text-sm resize-none focus:outline-none transition-all"
+            style={{
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              color: "var(--text-primary)",
+              outline: "none",
+            }}
+          />
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+              {note.length}/2000 characters
+            </span>
+            <button
+              onClick={save}
+              disabled={saving}
+              className="px-6 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-90 disabled:opacity-60"
+              style={{ background: "var(--accent)", color: "#fff" }}
+            >
+              {saving ? (
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+                    <path d="M12 2a10 10 0 0 1 10 10" />
+                  </svg>
+                  Saving…
+                </span>
+              ) : (
+                "Save Notes"
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function CreatorDetailPage() {
@@ -478,11 +634,9 @@ export default function CreatorDetailPage() {
   const username = decodeURIComponent(params.id as string);
 
   useEffect(() => {
-    // Guard against double-invoke in StrictMode
     if (fetchedRef.current) return;
     fetchedRef.current = true;
 
-    // ── Creator data — cached per username for 10 minutes
     cachedFetch(
       `creator:${username}`,
       () =>
@@ -504,7 +658,6 @@ export default function CreatorDetailPage() {
         setLoading(false);
       });
 
-    // ── Current user role — cached for 30 min (same key the dashboard uses)
     cachedFetch(
       "auth/me",
       () =>
@@ -526,7 +679,6 @@ export default function CreatorDetailPage() {
     [],
   );
 
-  // ── Loading state
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--background)" }}>
@@ -541,7 +693,6 @@ export default function CreatorDetailPage() {
     );
   }
 
-  // ── Not found
   if (!creator) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3" style={{ background: "var(--background)" }}>
@@ -551,7 +702,6 @@ export default function CreatorDetailPage() {
     );
   }
 
-  // ── Derived values
   const fullName = (creator.fullName as string)
     || [(creator.firstName as string), (creator.lastName as string)].filter(Boolean).join(" ")
     || (creator.username as string)
@@ -576,7 +726,6 @@ export default function CreatorDetailPage() {
 
   return (
     <>
-      {/* react-hot-toast — styled to match the app's dark theme */}
       <Toaster
         position="bottom-center"
         toastOptions={{
@@ -610,40 +759,40 @@ export default function CreatorDetailPage() {
       `}</style>
 
       <div className="min-h-screen pb-16" style={{ background: "var(--background)" }}>
-        <div className="max-w-5xl mx-auto px-6 py-8">
+        <div className="max-w-6xl mx-auto px-6 py-8">
 
           {/* Back */}
           <button onClick={() => router.back()}
-            className="flex items-center gap-2 text-sm mb-6"
+            className="flex items-center gap-2 text-sm mb-6 transition-colors hover:opacity-70"
             style={{ color: "var(--text-secondary)" }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
               <polyline points="15 18 9 12 15 6" />
             </svg>
-            Back to search
+            Back
           </button>
 
           {/* Admin edit panel */}
           {isAdmin && <AdminEditPanel creator={creator} onSaved={handleAdminSave} />}
 
           {/* Profile header */}
-          <div className="rounded-xl p-6 mb-6 flex items-start gap-5"
+          <div className="rounded-xl p-6 mb-6 flex flex-col sm:flex-row items-start gap-5"
             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
             {creator.profilePicture ? (
               <img
                 src={creator.profilePicture as string}
                 alt=""
-                className="w-16 h-16 rounded-2xl object-cover flex-shrink-0"
+                className="w-20 h-20 rounded-2xl object-cover flex-shrink-0"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
               />
             ) : (
-              <div className="w-16 h-16 rounded-2xl flex-shrink-0 flex items-center justify-center text-2xl font-bold"
+              <div className="w-20 h-20 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl font-bold"
                 style={{ background: "var(--accent)", color: "white" }}>
                 {((creator.username as string) || "?").charAt(0).toUpperCase()}
               </div>
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-3 flex-wrap">
-                <h1 className="text-xl font-semibold">{(creator.username as string) || "—"}</h1>
+                <h1 className="text-2xl font-semibold">{(creator.username as string) || "—"}</h1>
                 {creator.creatorSize && (
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-medium"
                     style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
@@ -674,25 +823,25 @@ export default function CreatorDetailPage() {
                 {creator.nichePrimary && (
                   <span className="px-2.5 py-1 rounded-full text-xs font-medium"
                     style={{ background: "rgba(99,102,241,0.15)", color: "var(--accent)" }}>
-                    Niche: {creator.nichePrimary as string}
+                    #{creator.nichePrimary as string}
                   </span>
                 )}
                 {creator.nicheSecondary && (
                   <span className="px-2.5 py-1 rounded-full text-xs"
                     style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
-                    Niche 2: {creator.nicheSecondary as string}
+                    #{creator.nicheSecondary as string}
                   </span>
                 )}
                 {creator.businessCategory && (
                   <span className="px-2.5 py-1 rounded-full text-xs"
                     style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
-                    Category: {creator.businessCategory as string}
+                    {creator.businessCategory as string}
                   </span>
                 )}
                 {creator.creatorType && (
                   <span className="px-2.5 py-1 rounded-full text-xs"
                     style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
-                    Type: {creator.creatorType as string}
+                    {creator.creatorType as string}
                   </span>
                 )}
                 {location && (
@@ -704,13 +853,13 @@ export default function CreatorDetailPage() {
                 {creator.gender && (
                   <span className="px-2.5 py-1 rounded-full text-xs capitalize"
                     style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
-                    Gender: {creator.gender as string}
+                    {creator.gender as string}
                   </span>
                 )}
                 {creator.ageGroup && (
                   <span className="px-2.5 py-1 rounded-full text-xs"
                     style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
-                    Age Group: {creator.ageGroup as string}
+                    {creator.ageGroup as string}
                   </span>
                 )}
               </div>
@@ -734,7 +883,7 @@ export default function CreatorDetailPage() {
           </div>
 
           {/* Info sections */}
-          <div className="grid md:grid-cols-2 gap-4 mb-4">
+          <div className="grid md:grid-cols-2 gap-4 mb-6">
             <Section title="Contact">
               <Row label="Email"       value={creator.email as string} />
               <Row label="Phone"       value={creator.phoneNumber as string} />
@@ -805,7 +954,7 @@ export default function CreatorDetailPage() {
           </div>
 
           {(creator.combinedHashtags || creator.hashtagsLast90Days) && (
-            <div className="mb-4">
+            <div className="mb-6">
               <Section title="Hashtags & Mentions">
                 {creator.combinedHashtags && (
                   <Row label="All hashtags" value={<span className="text-xs break-all">{creator.combinedHashtags as string}</span>} />
@@ -823,14 +972,19 @@ export default function CreatorDetailPage() {
           )}
 
           {/* Posts */}
-          <div className="rounded-xl p-5" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="rounded-xl p-6" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>
-                Recent Posts ({postMetrics.length} with data)
-              </h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>
+                  Recent Posts
+                </h3>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
+                  {postMetrics.length} with data
+                </span>
+              </div>
               {postMetrics.length > 6 && (
                 <button onClick={() => setShowAllPosts(!showAllPosts)}
-                  className="text-xs font-medium" style={{ color: "var(--accent)" }}>
+                  className="text-xs font-medium transition-colors hover:opacity-70" style={{ color: "var(--accent)" }}>
                   {showAllPosts ? "Show less" : "Show all 25"}
                 </button>
               )}
@@ -844,6 +998,9 @@ export default function CreatorDetailPage() {
               <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No post data available</p>
             )}
           </div>
+
+          {/* Notes */}
+          <NotesSection creatorId={params.id as string} />
 
         </div>
       </div>

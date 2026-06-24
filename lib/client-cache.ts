@@ -73,6 +73,23 @@ export function invalidateCache(...keys: string[]) {
   });
 }
 
+/**
+ * Invalidate every cached key starting with the given prefix.
+ *
+ * Use this when a mutation can affect a family of cache entries whose exact
+ * keys you don't know at the call site — e.g. saving a creator's note from
+ * the creator detail page should invalidate every `notes:...` entry on the
+ * Notes page (one per niche/filter/page combination), not just one key.
+ */
+export function invalidateCacheByPrefix(prefix: string) {
+  for (const k of store.keys()) {
+    if (k.startsWith(prefix)) store.delete(k);
+  }
+  for (const k of inflight.keys()) {
+    if (k.startsWith(prefix)) inflight.delete(k);
+  }
+}
+
 /** Read from cache synchronously — returns null if not cached */
 export function getCached<T>(key: string): T | null {
   const entry = store.get(key) as CacheEntry<T> | undefined;

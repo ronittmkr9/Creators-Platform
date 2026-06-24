@@ -9,7 +9,9 @@ export type AuditAction =
   | "ADD_TO_LIST"
   | "REMOVE_FROM_LIST"
   | "EXPORT"
-  | "FAILED_LOGIN";
+  | "FAILED_LOGIN"
+  | "NOTE"
+  | "EDIT_CREATOR";
 
 export async function logAudit(
   userId: string,
